@@ -1,0 +1,11 @@
+13/12/2018
+------------------------------
+- Managed to produce some examples but only on a system with no faulty replicas....
+- Restarted because I got stuck. The big system was too complex and I could not connect the theorems to the implementation
+- Started bft2 = a dump implementation. Managed to state a StateValid property (more or less) on the systems
+  - managed to define the faulty/nonfaulty replicas and their function.
+
+Problems: 
+1) Had some problems with the replicas - had to define them inductively and then have a single function which changes behavior based on this.
+    This made it easier to recurse on them in the proofs.
+2) Still have to figgure out how to connect the output of a replica to the sequence number obtained in the state.
