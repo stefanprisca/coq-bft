@@ -52,5 +52,11 @@ Example globalLedgerConsistent : let sys' := (ProcessRequest multiReplicaSys <<R
 Proof. intros. reflexivity. 
 Qed.
 
+Example stateValid_multiReplicaSys: StateValid multiReplicaSys.
+Proof. constructor. reflexivity. Qed.
+
+
+Example stateValid_multiReplicaSys_procReq: StateValid (ProcessRequest multiReplicaSys <<REQ "digest", "primary" >>).
+Proof. constructor. reflexivity. Qed.
 
 

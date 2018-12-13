@@ -229,7 +229,7 @@ Print ExecEnvironment.
 Print System.
 Definition ProcessRequest (sys : System) (req : Message) : System :=
   let env' := ProcessAllMessages MaxMessages sys (execEnv (GetReplicaIds sys) (GetState sys) EmptyQCerts [req]) in
-    (system "" (GetEnvState env') (GetReplicas sys)).
+    (system (GetView sys) (GetEnvState env') (GetReplicas sys)).
 
 Fixpoint getCommonLedger (state : SysState) (replicas: SysReplicas) (gLedger : Ledger) :=
 match replicas with
@@ -243,9 +243,27 @@ Definition GetGlobalLedger (sys:System) : option Ledger :=
     let gLedger := state "primary" in
       let replicas := GetReplicas sys in
          getCommonLedger state replicas gLedger.
+
+Definition GlobalLedgerValid  (sys: System) : Prop :=
+      match (GetGlobalLedger sys) with
+        | None => False
+        | Some (_) => True
+      end.
+
+Definition MajorityNonFaulty (sys:System) : Prop := True.
+
+Lemma system_safety: forall (sys:System),
+  GlobalLedgerValid sys
+  -> forall (digest : string), GlobalLedgerValid (ProcessRequest sys <<REQ digest , "primary">> ).
+Proof. intros. destruct sys as [view state replicas]. induction replicas.
+ - 
+
+
+
+
 (*
 Definition NonFaulty (rId : ReplicaId) : Prop := True.
-Definition MajorityNonFaulty (sys:System) : Prop := True.
+
 
 Inductive StateValid : System -> Prop :=
 | empty_valid : forall sys:System, (GetState sys) = EmptyState 
