@@ -4,8 +4,28 @@
 - Restarted because I got stuck. The big system was too complex and I could not connect the theorems to the implementation
 - Started bft2 = a dump implementation. Managed to state a StateValid property (more or less) on the systems
   - managed to define the faulty/nonfaulty replicas and their function.
+- The system is now executing a single request. And the theorems are about single requests. Theoretically, if state is maintained over a single request
+then the state is maintained for multiple requests.
 
 Problems: 
 1) Had some problems with the replicas - had to define them inductively and then have a single function which changes behavior based on this.
     This made it easier to recurse on them in the proofs.
 2) Still have to figgure out how to connect the output of a replica to the sequence number obtained in the state.
+
+----------------
+15/12/2018
+------------
+-Managed to prove on a simple system that the non faulty replicas (NFR) maintain the ledger 
+ and that the system state is valid after processing a request:
+
+Theorem system_safety : forall (sys : System) (m:string),
+      StateValid (ProcessRequest sys m nil).
+
+This basically says that the system is bft (more or less).
+
+Problems:
+1) Had issues with linking the output of the replica to the seq number in the state. I had to create a definition
+(nfrValue) which states the value produced by NFRs. The faulty ones are not taken into account.
+2) Had to change the GetLedger function to take in the expected value. This can become something like taking the value
+of the first NFR encountered and executing the logic after. For simplicity I keep it like this.
+3) Have to make NFRs be affected by faulty replicas and argue about their behavior after.

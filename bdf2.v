@@ -24,67 +24,88 @@ Definition IsNonFaulty (r:Replica) :  Prop :=
 
 Definition ReplicaFun := State -> string -> State.
 
+Definition nfrValue := 1.
 Definition NFReplicaFun (st:State) (msg:string):=
       match st with
-      | nil => [(NFReplica, 0)]
-      | (h, d)::t => (NFReplica, d)::(h, d)::t
+      | nil => [(NFReplica, nfrValue)]
+      | (h, d)::t => (NFReplica, nfrValue)::(h, d)::t
       end
 .
 
-Definition NewReplicaFun (r:Replica) : ReplicaFun :=
+Definition GetReplicaFun (r:Replica) : ReplicaFun :=
   match r with
   | FaultyReplica => fun st m => st
   | NFReplica => NFReplicaFun
   end.
 
 
-Definition System := list (Replica * ReplicaFun).
+Definition System := list Replica.
+
 
 Fixpoint ProcessRequest (sys : System) (m : string) (st : State) : State :=
   match sys with
   | nil => st
-  | (r,rFun)::t => (rFun (ProcessRequest t m st) m) 
+  | r::t => ((GetReplicaFun r) (ProcessRequest t m st) m) 
   end.
 
-Definition dumb1 := [(NFReplica, NewReplicaFun NFReplica); 
-                  (NFReplica, NewReplicaFun NFReplica); (NFReplica, NewReplicaFun NFReplica)].
+Lemma NFR_appends_state: forall r:Replica, IsNonFaulty r
+         -> forall (sys:System) (req:string), 
+              ProcessRequest (r::sys) req nil 
+               = ((r, nfrValue)::(ProcessRequest sys req nil)).
+Proof. intros.
+  generalize dependent sys. induction r.
+  - inversion H.
+  - simpl. intros. destruct (ProcessRequest sys req []).
+    + simpl. reflexivity.
+    + destruct p. simpl. reflexivity.
+Qed. 
+
+
+Definition dumb1 := [NFReplica; NFReplica; FaultyReplica; NFReplica].
 Compute ProcessRequest dumb1 "bla" nil.
 
-Fixpoint getLedgerHelper (st:State) (l:nat) : option nat :=
-match st with
-| nil => Some l
-| (NFReplica, l)::t => getLedgerHelper t l
-| (FaultyReplica, _)::t => getLedgerHelper t l
-end.
-
-Fixpoint GetLedger (st:State) : option nat :=
+Fixpoint GetLedger (st:State) (d: nat) : option nat :=
 match st with
 | nil => None
-| (NFReplica, ledger)::t => getLedgerHelper t ledger
-| (FaultyReplica, _)::t => GetLedger t
+| (NFReplica, l)::t => if (beq_nat d l) then (GetLedger t d)
+                        else None
+| (FaultyReplica, _)::t => GetLedger t d
 end.
+
+Lemma NFR_maintains_ledger:  
+        forall (sys:System) (req:string) (r:Replica) , 
+            IsNonFaulty r
+         -> (GetLedger (ProcessRequest sys req nil) nfrValue) 
+            = (GetLedger (ProcessRequest (r::sys) req nil) nfrValue).
+Proof. intros. rewrite NFR_appends_state.
+  - induction r.
+    + simpl. reflexivity.
+    + simpl. reflexivity.
+  - assumption.
+Qed.
 
 Inductive StateValid : State -> Prop :=
 | empty_valid : StateValid nil
-| nonfaulty_valid : forall (r: Replica) (st:State) , IsNonFaulty r -> 
-                StateValid st -> forall d:nat, (GetLedger st) = Some d -> StateValid ((r, d)::st)
-| faulty_valid : forall (r: Replica) (st:State) , ~(IsNonFaulty r) -> StateValid st
-                -> forall d:nat, StateValid ((r, d)::st).
-
-(* Need to link the output d from above to the replica R. We need to know that this came from there, and
-is not just a random d*)
+| nonfaulty_valid : forall (sys:System) (req:string) (r:Replica) , 
+              IsNonFaulty r 
+              -> StateValid (ProcessRequest sys req nil)
+                -> (GetLedger (ProcessRequest sys req nil) nfrValue) 
+                     = (GetLedger (ProcessRequest (r::sys) req nil) nfrValue) 
+                    -> StateValid ((ProcessRequest (r::sys) req nil))
+| faulty_valid : forall (sys:System) (req:string) (r:Replica) , ~(IsNonFaulty r) -> 
+      StateValid (ProcessRequest sys req nil) -> StateValid ((ProcessRequest (r::sys) req nil)).
 
 Theorem system_safety : forall (sys : System) (m:string),
       StateValid (ProcessRequest sys m nil).
-Proof. intros. induction ProcessRequest.
+Proof. intros. induction sys.
   - constructor.
-  - destruct a as [r d]. induction r.
+  - induction a.
     + apply faulty_valid.
       { unfold not. intros contra. inversion contra. }
-      { apply IHs. }
+      { assumption. }
     + apply nonfaulty_valid.
       { reflexivity. }
-      { apply IHs. }
-      { admit. }
-Admitted.
+      { assumption. }
+      { apply NFR_maintains_ledger. reflexivity. }
+Qed.
 
