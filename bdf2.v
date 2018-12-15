@@ -28,7 +28,7 @@ Definition nfrValue := 1.
 Definition NFReplicaFun (st:State) (msg:string):=
       match st with
       | nil => [(NFReplica, nfrValue)]
-      | (h, d)::t => (NFReplica, nfrValue)::(h, d)::t
+      | (h, d)::t => (NFReplica, d)::(h, d)::t
       end
 .
 
@@ -48,16 +48,19 @@ Fixpoint ProcessRequest (sys : System) (m : string) (st : State) : State :=
   | r::t => ((GetReplicaFun r) (ProcessRequest t m st) m) 
   end.
 
-Lemma NFR_appends_state: forall r:Replica, IsNonFaulty r
+Lemma NFR_appends_expected_state: forall r:Replica, IsNonFaulty r
          -> forall (sys:System) (req:string), 
               ProcessRequest (r::sys) req nil 
                = ((r, nfrValue)::(ProcessRequest sys req nil)).
 Proof. intros.
   generalize dependent sys. induction r.
   - inversion H.
-  - simpl. intros. destruct (ProcessRequest sys req []).
+  - simpl. intros. induction sys.
     + simpl. reflexivity.
-    + destruct p. simpl. reflexivity.
+    + destruct a.
+      { simpl. apply IHsys. }
+      { simpl. rewrite IHsys. reflexivity. }
+
 Qed. 
 
 
@@ -77,7 +80,7 @@ Lemma NFR_maintains_ledger:
             IsNonFaulty r
          -> (GetLedger (ProcessRequest sys req nil) nfrValue) 
             = (GetLedger (ProcessRequest (r::sys) req nil) nfrValue).
-Proof. intros. rewrite NFR_appends_state.
+Proof. intros. rewrite NFR_appends_expected_state.
   - induction r.
     + simpl. reflexivity.
     + simpl. reflexivity.
