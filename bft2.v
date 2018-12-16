@@ -22,54 +22,144 @@ Definition IsNonFaulty (r:Replica) :  Prop :=
 
 Print list.
 
-Inductive State : Type :=
-| prePrep: (Replica * nat) -> State
-| prep : (Replica * nat) -> State -> State.
+Inductive Message : Type := 
+| message: (nat * Replica * nat ) -> Message.
 
-Definition ReplicaFun := State -> string -> State.
+Notation "<< i ; r ; n >>" := (message (i, r, n)).
+
+Inductive State : Type :=
+| prePrep: nat -> (Replica * (list Message)) -> State
+| prep : nat -> (Replica * (list Message)) -> State -> State.
+
+Definition ReplicaFun := nat -> State -> State.
 
 Definition nfrValue := 0.
 Definition faultyValue := 100.
 
-Fixpoint getPrimaryValue (st:State) : nat :=
+Definition replaceWithVal (msg: Message) (v:nat) :=
+  match msg with
+  | <<i;r;n >> => <<i;r;v>>
+  end.
+
+Definition replaceAllWithVal (v:nat) (messages : list Message) :=
+      map (fun msg => (replaceWithVal msg v) ) messages.
+
+Fixpoint getUniqueMsgVal (msgs:list Message) :=
+match msgs with
+| nil => None
+| <<i;r;n>> :: t => Some n
+end.
+
+Inductive NFPrepConsistent : list Message -> Prop :=
+| nfpc_empty : NFPrepConsistent nil
+| nfpc_ind  : forall (msgs : list Message) ( i n : nat) (r : Replica),
+                IsNonFaulty r -> (getUniqueMsgVal msgs) = (Some n)
+                -> NFPrepConsistent (<<i;r;n>>::msgs).
+
+
+Lemma replaceAllWithVal_nfpc: forall (nv : nat) (msgs : list Message),
+    NFPrepConsistent (replaceAllWithVal nv msgs).
+Admitted.
+
+Lemma replaceAllWithVal_nv: forall (nv : nat) (msgs : list Message),
+    getUniqueMsgVal (replaceAllWithVal nv msgs) = Some nv.
+Admitted.
+
+Fixpoint getMsgValueAtI (i : nat) (msgs : list Message) :=
+  match msgs with
+  | nil => None
+  | <<i';r;v>>::t => if (beq_nat i' i) then Some v
+                      else getMsgValueAtI i t
+end.
+
+Definition replaceWithValueAt (i:nat) (msgs: list Message) :=
+  let ov := getMsgValueAtI i msgs in
+    match ov with 
+    | Some v => replaceAllWithVal v msgs
+    | None => msgs
+    end.
+  
+Fixpoint genSequenceNumList (st:State) (i : nat): list Message :=
     match st with
-    | prePrep (P, n) => n
-    | prep _ t => getPrimaryValue t
+    | prePrep _ (P, pSeqNums) => (replaceWithValueAt i pSeqNums)
+    | prep _ _ t => genSequenceNumList t i
     end.
 
-Definition NFReplicaFun (st:State) (req:string):=
-      match st with
-      | prePrep (P, n) => prep (NFReplica, n) (prePrep (P, n))
-      | st => prep (NFReplica, (getPrimaryValue st)) st
-      end
-.
+Inductive CliqConnected : State -> Prop :=
+| primary_cc : forall (msgs: list Message),
+    ~(exists (i :nat), (getMsgValueAtI i msgs) = None) 
+      -> forall (pI:nat) (p:Replica), CliqConnected (prePrep pI (p, msgs))
+
+| replica_cc : forall (msgs: list Message),
+    ~(exists (i :nat), (getMsgValueAtI i msgs) = None) 
+      -> forall (rI:nat) (r:Replica) (st : State), 
+        CliqConnected st -> CliqConnected(prep rI (r, msgs) st). 
+
+Fixpoint getPrimaryValue (st:State) (i : nat) :=
+match st with
+    | prePrep _ (P, pPrepMsgs) => (getMsgValueAtI i pPrepMsgs)
+    | prep _ _ t => getPrimaryValue t i
+    end.
+
+Lemma genSeqNumList_primaryValue : forall (i : nat) (st:State),
+  CliqConnected st ->
+  getUniqueMsgVal(genSequenceNumList st i) = getPrimaryValue st i.
+Proof. intros. induction H.
+  - simpl. remember (getMsgValueAtI i msgs) as msg. destruct msg.
+    + unfold replaceWithValueAt. rewrite <- Heqmsg. apply replaceAllWithVal_nv.
+    + unfold not in H. destruct H. exists i. rewrite Heqmsg. reflexivity.
+  - simpl. apply IHCliqConnected.
+Qed.
+
+Definition NFReplicaFun (i : nat) (st:State) :=
+       prep i (NFReplica, (genSequenceNumList st i)) st.
+
+Lemma NFReplica_PrepsCorrectState : forall (i pVal : nat) (st:State),
+  PrimaryValEq st pVal -> 
+    HdNFPrepValEq (NFReplicaFun i st) pVal.
+
+Proof.
+simpl. intros. induction st.
+- destruct p. simpl. simpl in H. induction l.
+  + inversion H.
+  + simpl.
+
+Fixpoint genFaultySequenceNumList (st:State) (i : nat): list nat :=
+    match st with
+    | prePrep (P, pSeqNums) => (replaceWithVal (nth i pSeqNums nfrValue) pSeqNums)
+    | prep _ (r, seqNums) t => (replaceWithVal faultyValue seqNums)
+    end.
+
+Definition FaultyReplicaFun (i : nat) (st:State) :=
+       prep i (FaultyReplica, (genFaultySequenceNumList st i)) st.
+
 
 Definition GetReplicaFun (r:Replica) : ReplicaFun :=
   match r with
-  | FaultyReplica => fun st m => prep (FaultyReplica, faultyValue) st
+  | FaultyReplica => FaultyReplicaFun
   | NFReplica => NFReplicaFun
   end.
 
 
 Inductive System : Type :=
-| primary : Replica -> System
+| primary : nat -> Replica -> System
 | replica : Replica -> System -> System.
 
-
-Fixpoint ProcessRequest (sys : System) (req : string) : State :=
+Fixpoint ProcessRequest (sys : System) (i : nat) : State :=
   match sys with
-  | primary P => prePrep (P, nfrValue)
-  | replica r sys' => ((GetReplicaFun r) (ProcessRequest sys' req) req) 
+  | primary len P =>  prePrep (P, repeat len nfrValue)
+  | replica r sys' => ((GetReplicaFun r) i (ProcessRequest sys' (S i) )) 
   end.
 
+Lemma prePrep_always_nfrValues: forall (len i : nat) (P : Replica),
+      ProcessRequest (primary len P) i = prePrep (P, repeat len nfrValue).
+Admitted.
 
-Lemma getPrimaryValue_nfrValue: forall (sys:System) (req: string),
-      getPrimaryValue (ProcessRequest sys req) = nfrValue.
-Proof. intros. induction sys.
-  - reflexivity.
-  - remember (ProcessRequest sys req) as st. 
-    simpl. rewrite <- Heqst. induction st;
-      destruct p; induction r; simpl; simpl in IHsys; apply IHsys.
+Lemma genSequenceNumList_nfrValues: forall (sys:System) (i: nat),
+      Forall (fun x => x = nfrValue) (genSequenceNumList (ProcessRequest sys i) (S i)).
+Proof. intros. destruct sys eqn:eqd.
+  - unfold ProcessRequest. unfold genSequenceNumList. simpl. constructor.
+  - simpl.
 Qed.
 
 (* TODO: NFR state should be quorum value. *)
