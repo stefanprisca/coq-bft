@@ -4,11 +4,10 @@ Require Export Coq.Strings.String.
 Require Import Coq.Logic.FunctionalExtensionality.
 Require Import Coq.Lists.List.
 Import ListNotations.
-Require Import String.
 Require Import Maps.
-Open Scope string_scope.
 
 Definition ReplicaId := string.
+
 
 Inductive Replica : Set :=
 | FaultyReplica : Replica
@@ -23,9 +22,9 @@ Definition IsNonFaulty (r:Replica) :  Prop :=
 Print list.
 
 Inductive Message : Type := 
-| message: (nat * Replica * nat ) -> Message.
+| message: (nat * nat ) -> Message.
 
-Notation "<< i ; r ; n >>" := (message (i, r, n)).
+Notation "<< i ; n >>" := (message (i, n)).
 
 Inductive State : Type :=
 | prePrep: nat -> (Replica * (list Message)) -> State
@@ -35,58 +34,54 @@ Definition ReplicaFun := nat -> State -> State.
 
 Definition nfrValue := 0.
 Definition faultyValue := 100.
+Definition errorNotFound := 400.
 
-Definition replaceWithVal (msg: Message) (v:nat) :=
-  match msg with
-  | <<i;r;n >> => <<i;r;v>>
+Fixpoint multicast (i : nat) (v:nat) :=
+  match i with
+  | 0 => [<<0;v>>]
+  | S i' => <<i;v>>::(multicast i' v)
   end.
-
-Definition replaceAllWithVal (v:nat) (messages : list Message) :=
-      map (fun msg => (replaceWithVal msg v) ) messages.
 
 Fixpoint getMsgValueAtI (i : nat) (msgs : list Message) :=
   match msgs with
   | nil => None
-  | <<i';r;v>>::t => if (beq_nat i' i) then Some v
+  | <<i';v>>::t => if (beq_nat i' i) then Some v
                       else getMsgValueAtI i t
 end.
 
-Fixpoint getUniqueMsgVal (msgs:list Message) :=
-match msgs with
-| nil => None
-| <<i;r;n>> :: t => match (getUniqueMsgVal t) with
-                    | None => None
-                    | Some n' => if (beq_nat n' n) then Some n
-                                  else None
-                    end
+Definition beq_opt (on : option nat) (n : nat) :=
+match on with 
+| None => false
+| Some n' => beq_nat n' n
 end.
+
+Fixpoint getUniqueMsgVal (msgs:list Message) :=
+  match msgs with
+  | nil => None
+  | <<i;n>> :: t => if (beq_opt (getUniqueMsgVal t) n) then Some n
+                    else None
+  end.
 
 Inductive NFPrepConsistent : list Message -> Prop :=
 | nfpc_empty : NFPrepConsistent nil
 | nfpc_ind  : forall (msgs : list Message) ( i n : nat) (r : Replica),
-                IsNonFaulty r -> (getUniqueMsgVal msgs) = (Some n)
-                -> NFPrepConsistent (<<i;r;n>>::msgs).
+                IsNonFaulty r -> (getUniqueMsgVal msgs) = Some n
+                -> NFPrepConsistent (<<i;n>>::msgs).
 
-
-Lemma replaceAllWithVal_nfpc: forall (nv : nat) (msgs : list Message),
-    NFPrepConsistent (replaceAllWithVal nv msgs).
+Lemma multicast_nv: forall (nv : nat) (len : nat),
+    getUniqueMsgVal (multicast len nv ) = Some nv.
 Admitted.
 
-Lemma replaceAllWithVal_nv: forall (nv : nat) (msgs : list Message),
-    getUniqueMsgVal (replaceAllWithVal nv msgs) = Some nv.
-Admitted.
+Definition multicastOpt (on : option nat) (prePrepMsgs: list Message) (i:nat) :=
+match on with
+| None => nil
+| Some v => multicast (length prePrepMsgs) v
+end.
 
-
-Definition replaceWithValueAt (i:nat) (msgs: list Message) :=
-  let ov := getMsgValueAtI i msgs in
-    match ov with 
-    | Some v => replaceAllWithVal v msgs
-    | None => msgs
-    end.
-  
 Fixpoint genSequenceNumList (st:State) (i : nat): list Message :=
     match st with
-    | prePrep _ (P, prePrepMsgs) => (replaceWithValueAt i prePrepMsgs)
+    | prePrep r (P, prePrepMsgs) => 
+            multicastOpt (getMsgValueAtI i prePrepMsgs) prePrepMsgs i
     | prep _ _ t => genSequenceNumList t i
     end.
 
@@ -119,10 +114,10 @@ Fixpoint getPrePrepValues (st:State) :=
 Lemma genSeqNumList_PrePrepValue : forall (i : nat) (st:State),
   CliqConnected st ->
   getUniqueMsgVal(genSequenceNumList st i) = getPrePrepValue st i.
-Proof. intros. induction H.
-  - simpl. remember (getMsgValueAtI i msgs) as msg. destruct msg.
-    + unfold replaceWithValueAt. rewrite <- Heqmsg. apply replaceAllWithVal_nv.
-    + unfold not in H. repeat destruct H. exists i. rewrite Heqmsg. reflexivity.
+Proof. intros. induction H. induction H.
+  - simpl. remember (getMsgValueAtI i msgs) as mval. destruct mval.
+    + simpl. apply multicast_nv.
+    + unfold not in H. repeat destruct H. exists i. rewrite Heqmval. reflexivity.
   - simpl. apply IHCliqConnected.
 Qed.
 
@@ -142,8 +137,8 @@ Definition NFReplicaFun (i : nat) (st:State) :=
 
 Fixpoint genFaultySequenceNumList (st:State) (i : nat): list Message :=
     match st with
-    | prePrep _ (P, prePrepMsgs) => (replaceAllWithVal faultyValue prePrepMsgs)
-    | prep _ (r, prepMsgs) t => (replaceAllWithVal faultyValue prepMsgs)
+    | prePrep _ (P, prePrepMsgs) => multicast (length prePrepMsgs) faultyValue
+    | prep _ (r, prepMsgs) t => multicast (length prepMsgs) faultyValue
     end.
 
 Definition FaultyReplicaFun (i : nat) (st:State) :=
@@ -163,7 +158,7 @@ Inductive System : Type :=
 
 Fixpoint ProcessRequest (sys : System) (i : nat) : State :=
   match sys with
-  | primary len P =>  prePrep i (P, repeat <<i;NFReplica;nfrValue>> len)
+  | primary len P =>  prePrep i (P, repeat <<i;nfrValue>> len)
   | replica r sys' => ((GetReplicaFun r) i (ProcessRequest sys' (S i) )) 
   end.
 
@@ -203,17 +198,16 @@ Fixpoint GetQCertValue (st:State) (i : nat) :=
 
 (* TODO: NFR state should be quorum value. *)
 Lemma NFR_state_nfrValue: forall r:Replica, IsNonFaulty r
-         -> forall (sys:System), 
-              ProcessRequest (replica r sys) 
-               = (prep (r, nfrValue) (ProcessRequest sys)).
+         -> forall (sys:System) (req:string) (i:nat) (msgs : list Message), 
+              forall st:State, CliqConnected st ->
+              ProcessRequest sys (S i) = st ->
+              ProcessRequest (replica r sys) i = (prep i (r, msgs) st).
 Proof. intros.
   generalize dependent sys. induction r.
   - inversion H.
-  - simpl. intros. induction sys.
-    + simpl. reflexivity.
-    + induction r.
-      { simpl. rewrite getPrimaryValue_nfrValue. reflexivity. }
-      { simpl. rewrite IHsys. simpl. rewrite getPrimaryValue_nfrValue. reflexivity. }
+  - simpl. intros. induction H0.
+    + unfold NFReplicaFun. rewrite H1. simpl. destruct (getMsgValueAtI i msgs0) eqn:eqd.
+      { simpl. remember (multicast (Datatypes.length msgs0) n) as msgs'.
 Qed. 
 
 Definition getLedgerHelper (l:nat) (ledger : option nat) :=
