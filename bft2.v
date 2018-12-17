@@ -72,7 +72,7 @@ Lemma multicast_nv: forall (nv : nat) (len : nat),
     getUniqueMsgVal (multicast len nv ) = Some nv.
 Admitted.
 
-Definition multicastOpt (on : option nat) (prePrepMsgs: list Message) (i:nat) :=
+Definition multicastOpt (on : option nat) (prePrepMsgs: list Message) :=
 match on with
 | None => nil
 | Some v => multicast (length prePrepMsgs) v
@@ -81,7 +81,7 @@ end.
 Fixpoint genSequenceNumList (st:State) (i : nat): list Message :=
     match st with
     | prePrep r (P, prePrepMsgs) => 
-            multicastOpt (getMsgValueAtI i prePrepMsgs) prePrepMsgs i
+            multicastOpt (getMsgValueAtI i prePrepMsgs) prePrepMsgs
     | prep _ _ t => genSequenceNumList t i
     end.
 
@@ -158,7 +158,7 @@ Inductive System : Type :=
 
 Fixpoint ProcessRequest (sys : System) (i : nat) : State :=
   match sys with
-  | primary len P =>  prePrep i (P, repeat <<i;nfrValue>> len)
+  | primary len P =>  prePrep i (P, multicast len nfrValue)
   | replica r sys' => ((GetReplicaFun r) i (ProcessRequest sys' (S i) )) 
   end.
 
@@ -192,74 +192,62 @@ Fixpoint qc_countPrePrepVals (st:State) (i : nat) :=
     end.
 
 
-Fixpoint GetQCertValue (st:State) (i : nat) :=
+Fixpoint GetQCertificate (st:State) (i:nat) :=
     qc_countPrePrepVals st i.
 
+Definition QC_Value (qc : nat * nat):=
+match qc with
+  | (v, sign) => v
+end. 
 
-(* TODO: NFR state should be quorum value. *)
-Lemma NFR_state_nfrValue: forall r:Replica, IsNonFaulty r
-         -> forall (sys:System) (req:string) (i:nat) (msgs : list Message), 
-              forall st:State, CliqConnected st ->
-              ProcessRequest sys (S i) = st ->
-              ProcessRequest (replica r sys) i = (prep i (r, msgs) st).
-Proof. intros.
-  generalize dependent sys. induction r.
-  - inversion H.
-  - simpl. intros. induction H0.
-    + unfold NFReplicaFun. rewrite H1. simpl. destruct (getMsgValueAtI i msgs0) eqn:eqd.
-      { simpl. remember (multicast (Datatypes.length msgs0) n) as msgs'.
-Qed. 
+Lemma NFR_QCertNFRValue : forall r: Replica, IsNonFaulty r
+        -> forall (sys:System) (i:nat),
+            QC_Value (GetQCertificate (ProcessRequest (replica r sys) i ) i) = nfrValue.
+Proof. intros r. destruct r.
+  - intros. inversion H.
+  - intros. admit.
+Admitted.
 
-Definition getLedgerHelper (l:nat) (ledger : option nat) :=
-match ledger with
-| Some l => Some l
-| _ => None
-end.
-
-Fixpoint GetLedger (st:State) : option nat :=
+Fixpoint getLedgersHelper (st originalSt : State) :=
 match st with
-| prePrep (P, n) => Some n
-| prep (NFReplica, l) t => getLedgerHelper l (GetLedger t)
-| prep (FaultyReplica, l) t => GetLedger t
+| prePrep i (P, msgs) => [getUniqueMsgVal msgs]
+| prep i (NFReplica, _) t => (Some (QC_Value (GetQCertificate originalSt i)))::(getLedgersHelper t originalSt)
+| prep _ (FaultyReplica, _) t => getLedgersHelper t originalSt
 end.
 
-Lemma NFR_maintains_ledger:  
-        forall (sys:System) (req:string) (r:Replica) , 
+
+Definition GetLedgers (st:State) :=
+  getLedgersHelper st st.
+
+Lemma NFR_ledger_nfrvalue:  
+        forall (sys:System) (req:string) (r:Replica) (i:nat), 
             IsNonFaulty r
-         -> (GetLedger (ProcessRequest sys req)) 
-            = (GetLedger (ProcessRequest (replica r sys) req)).
-Proof. intros. rewrite NFR_state_nfrValue.
-  - induction r.
-    + simpl. reflexivity.
-    + simpl. remember (GetLedger (ProcessRequest sys req)) as ledger.
-      destruct ledger.
-      { reflexivity. }
-      { reflexivity. }
-  - assumption.
-Qed.
+         -> (GetLedgers (ProcessRequest sys (S i))) 
+            = (Some nfrValue)::(GetLedgers (ProcessRequest (replica r sys) i)).
+Admitted.
 
 Inductive StateValid : State -> Prop :=
-| empty_valid : forall (P:Replica) (n:nat), StateValid (prePrep (P, n))
-| nonfaulty_valid : forall (sys:System) (req:string) (r:Replica) , 
+| empty_valid : forall (P:Replica) (i : nat) (msgs: list Message), StateValid (prePrep i (P, msgs))
+| nonfaulty_valid : forall (sys:System) (r:Replica) , 
               IsNonFaulty r 
-              -> StateValid (ProcessRequest sys req)
-                -> (GetLedger (ProcessRequest sys req)) 
-                     = (GetLedger (ProcessRequest (replica r sys) req)) 
-                    -> StateValid ((ProcessRequest (replica r sys) req))
-| faulty_valid : forall (sys:System) (req:string) (r:Replica) , ~(IsNonFaulty r) -> 
-      StateValid (ProcessRequest sys req) -> StateValid ((ProcessRequest (replica r sys) req)).
+              -> forall i:nat, StateValid (ProcessRequest sys (S i))
+                -> (GetLedgers (ProcessRequest sys (S i))) 
+                     = (GetLedgers (ProcessRequest (replica r sys) i)) 
+                    -> StateValid ((ProcessRequest (replica r sys) i))
+| faulty_valid : forall (sys:System) (i:nat) (r:Replica) , ~(IsNonFaulty r) -> 
+      StateValid (ProcessRequest sys (S i)) -> StateValid ((ProcessRequest (replica r sys) i)).
 
-Theorem system_safety : forall (sys : System) (m:string),
-      StateValid (ProcessRequest sys m).
-Proof. intros. induction sys.
+Theorem system_safety : forall (sys : System),
+      forall i:nat, StateValid (ProcessRequest sys i).
+Proof. intros sys. induction sys.
   - constructor.
   - induction r.
-    + apply faulty_valid.
+    + intros. apply faulty_valid.
       { unfold not. intros contra. inversion contra. }
-      { assumption. }
-    + apply nonfaulty_valid.
+      { admit. }
+    + intros. apply nonfaulty_valid.
       { reflexivity. }
-      { assumption. }
-      { apply NFR_maintains_ledger. reflexivity. }
-Qed.
+      { admit. }
+      { admit. }
+Admitted.
 
