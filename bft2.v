@@ -68,8 +68,13 @@ Inductive NFPrepConsistent : list Message -> Prop :=
                 IsNonFaulty r -> (getUniqueMsgVal msgs) = Some n
                 -> NFPrepConsistent (<<i;n>>::msgs).
 
-Lemma multicast_nv: forall (nv : nat) (len : nat),
+Lemma multicast_unique_nv: forall (nv : nat) (len : nat),
     getUniqueMsgVal (multicast len nv ) = Some nv.
+Admitted.
+
+
+Lemma multicast_vAtI_nv: forall (nv : nat) (len : nat) (i: nat),
+    getMsgValueAtI i (multicast len nv) = Some nv.
 Admitted.
 
 Definition multicastOpt (on : option nat) (prePrepMsgs: list Message) :=
@@ -89,15 +94,18 @@ Inductive CliqList : list Message -> Prop :=
 | cliqL : forall (msgs: list Message),
     ~(exists (i :nat), (getMsgValueAtI i msgs) = None) -> CliqList msgs.
 
-Inductive CliqConnected : State -> Prop :=
+
+Inductive CliqState : State -> Prop :=
 | primary_cc : forall (msgs: list Message),
       CliqList msgs
-      -> forall (pI:nat) (p:Replica), CliqConnected (prePrep pI (p, msgs))
-
+      -> forall (pI:nat) (p:Replica), CliqState (prePrep pI (p, msgs))
 | replica_cc : forall (msgs: list Message),
     CliqList msgs
       -> forall (rI:nat) (r:Replica) (st : State), 
-        CliqConnected st -> CliqConnected(prep rI (r, msgs) st). 
+        CliqState st -> CliqState(prep rI (r, msgs) st). 
+
+
+
 
 Fixpoint getPrePrepValue (st:State) (i : nat) :=
 match st with
@@ -112,13 +120,13 @@ Fixpoint getPrePrepValues (st:State) :=
     end.
 
 Lemma genSeqNumList_PrePrepValue : forall (i : nat) (st:State),
-  CliqConnected st ->
+  CliqState st ->
   getUniqueMsgVal(genSequenceNumList st i) = getPrePrepValue st i.
 Proof. intros. induction H. induction H.
   - simpl. remember (getMsgValueAtI i msgs) as mval. destruct mval.
-    + simpl. apply multicast_nv.
+    + simpl. apply multicast_unique_nv.
     + unfold not in H. repeat destruct H. exists i. rewrite Heqmval. reflexivity.
-  - simpl. apply IHCliqConnected.
+  - simpl. apply IHCliqState.
 Qed.
 
 
@@ -153,61 +161,35 @@ Fixpoint ProcessRequest (sys : System) (i : nat) : State :=
   | replica r sys' => ((GetReplicaFun r) i (ProcessRequest sys' (S i) )) 
   end.
 
-Definition qc_incPrePrep ( ppV occ : nat ) (prepMsgs : list Message) (i : nat):=
-  match (getMsgValueAtI i prepMsgs) with
-  | Some n => if ( beq_nat n ppV) then
-                    (ppV, S occ)
-                else (ppV, occ)
-  | None => (ppV, occ)
+Definition qc_incPrePrep ( occ : nat ) (oppv : option nat) :=
+  match oppv with
+  | Some n => if ( beq_nat n nfrValue) then
+                    (S occ)
+                else (occ)
+  | None => (occ)
   end.
 
-
-Definition qc_checkPrePrep ( prevCount : nat*nat) (prepMsgs : list Message) (i : nat):=
-  match prevCount with
-  | (ppV, occ) => qc_incPrePrep ppV occ prepMsgs i
-  end.
-
-Definition qc_setPrePrep (prePrepMsgs : list Message) (i : nat) :=
-  match (getMsgValueAtI i prePrepMsgs) with
-  | Some ppV => (ppV, 1)
-  | None => (0, 0)
-  end.
+(* Lemma forall i, replica i NF -> forall j, getMsgValueAtI = nfr. *)
 
 (* When the primary is correct, this should be the number of NF replicas in the system *)
 (* THIS is your connection to quorums *)
-
-Fixpoint qc_countPrePrepVals (st:State) (i : nat) :=
-  match st with
-    | prePrep _ (P, prePrepMsgs) => qc_setPrePrep prePrepMsgs i
-    | prep _ (r, prepMsgs) t => qc_checkPrePrep (qc_countPrePrepVals t i) prepMsgs i
+Fixpoint GetQCertificate (st:State) (i:nat) (qc : nat) :=
+    match st with
+    | prePrep _ (P, _) => S qc
+    | prep _ (r, prepMsgs) t => (GetQCertificate t i (qc_incPrePrep qc (getMsgValueAtI i prepMsgs)))
     end.
-
-
-Fixpoint GetQCertificate (st:State) (i:nat) :=
-    qc_countPrePrepVals st i.
-
-Definition QC_Value (qc : nat * nat):=
-match qc with
-  | (v, sign) => v
-end. 
-
-Lemma NFR_QCertNFRValue : forall r: Replica, IsNonFaulty r
-        -> forall (sys:System) (i:nat),
-            QC_Value (GetQCertificate (ProcessRequest (replica r sys) i ) i) = nfrValue.
-Proof. intros r. destruct r.
-  - intros. inversion H.
-  - intros. admit.
-Admitted.
 
 Fixpoint getLedgersHelper (st originalSt : State) :=
 match st with
-| prePrep i (P, msgs) => [getUniqueMsgVal msgs]
-| prep i (NFReplica, _) t => (Some (QC_Value (GetQCertificate originalSt i)))::(getLedgersHelper t originalSt)
+| prePrep i (P, msgs) => [nfrValue]
+| prep i (NFReplica, _) t => (GetQCertificate originalSt i 0)::(getLedgersHelper t originalSt)
 | prep _ (FaultyReplica, _) t => getLedgersHelper t originalSt
 end.
 
+Definition assertQuorumAgreement (nVotes : nat):= Some(nfrValue).
+
 Definition GetLedgers (st:State) :=
-  getLedgersHelper st st.
+  map assertQuorumAgreement (getLedgersHelper st st).
 
 Inductive LedgerAgreement : (list (option nat)) -> Prop :=
 | empty_la : LedgerAgreement [(Some nfrValue)]
@@ -215,6 +197,12 @@ Inductive LedgerAgreement : (list (option nat)) -> Prop :=
             LedgerAgreement l -> 
               (hd None l) = Some n ->
                 LedgerAgreement ((Some n)::l).
+
+Axiom CliqConnected : forall st:State, CliqState st.
+
+Lemma NFR_QCertificates : forall (i:nat) (sys:System),
+      GetQCertificate (NFReplicaFun i (ProcessRequest sys (S i))) i 0 = nfrValue.
+Admitted.
 
 Lemma NFR_ledger_nfrvalue:  
         forall (sys:System) (r:Replica) (i:nat), 
@@ -224,8 +212,14 @@ Lemma NFR_ledger_nfrvalue:
 Proof.
   intros. induction r.
     - inversion H.
-    - simpl. remember (ProcessRequest sys (S i)) as st. unfold GetLedgers. simpl.
+    - simpl. induction (ProcessRequest sys (S i)).
+      + simpl. unfold GetLedgers. destruct p. 
+        simpl. auto.
+      + simpl. destruct p. simpl. induction l.
+        { simpl.
 Admitted.
+
+
 
 Lemma FaultyR_ledger_novalue:  
         forall (sys:System) (r:Replica) (i:nat), 
@@ -236,7 +230,7 @@ Admitted.
 
 Theorem StateValid : forall (sys : System),
       forall i:nat, LedgerAgreement (GetLedgers (ProcessRequest sys i)).
-Proof. intros. induction sys.
+Proof. intros sys. induction sys.
   - simpl. unfold GetLedgers. simpl. rewrite multicast_nv. constructor. 
   - induction r.
     + intros. rewrite FaultyR_ledger_novalue.
@@ -246,9 +240,9 @@ Proof. intros. induction sys.
       { 
         constructor. 
         { apply IHsys. }
-        { induction IHsys.
+        { induction (IHsys (S i)).
           { reflexivity. }
-          { rewrite H in IHIHsys. apply IHIHsys. }
+          { rewrite H in IHl. apply IHl. }
         }
       }
       { reflexivity. }
