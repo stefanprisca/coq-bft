@@ -46,9 +46,6 @@ Definition getMsgVal msg := match msg with | message r v => v end.
 Definition getMsgReplica msg := match msg with | message r v => r end.
 
 
-Lemma multicast_nv: forall (nv : nat) (st:State),
-    Forall (fun m => eq (getMsgVal m) nv) (multicast st nv).
-Admitted.
 
 Fixpoint getPrePrepValue (st:State) :=
   match st with
@@ -119,17 +116,17 @@ match msgs with
 | _::t => countNFR_msgs t
 end.
 
-Definition countNFR_state (st:State) :=
+Fixpoint countNFR_state (st:State) :=
 match st with
-  | prePrep (_, pPrepMsgs) => countNFR_msgs pPrepMsgs
-  | prep (_, prepMsgs) t => countNFR_msgs prepMsgs
+  | prePrep (NFReplica, _) => 1
+  | prePrep _ => 0
+  | prep (NFReplica, _) t => S (countNFR_state t)
+  | prep _ t => countNFR_state t
 end.
 
 Axiom sysLen : forall (sys : System), exists F:nat, systemLen sys = 3*F+1.
 Axiom sysNofNFR : forall (sys : System), exists F:nat, countNFR_system sys = 2*F+1.
-
-Definition initState (sys : System) :=
-  prePrep (NFReplica, (map (fun r => <<r ; nfrValue>>) (NFReplica::sys))).
+Axiom primaryNonFaulty : forall st:State, getPrePrepValue st = Some nfrValue.
 
 Fixpoint processRequestHelper (sys : System) (st : State) :=
 match sys with
@@ -137,20 +134,43 @@ match sys with
   | r::sys' => (GetReplicaFun r) (processRequestHelper sys' st) 
   end.
 
+Definition initState sys := ( prePrep (NFReplica, (map (fun r => <<r ; nfrValue>>) (NFReplica::sys)))).
+
+Lemma multicast_length: forall (st1 st2 : State),
+    stateLen st1 = stateLen st2
+      -> forall v:nat, multicast st1 v = multicast st2 v.
+Admitted.
+
+Lemma processHelper_stLen : forall (sys : System) (st:State),
+    stateLen st = stateLen (processRequestHelper sys st).
+Admitted.
+
+Lemma ProcessRequest_NFR : forall (sys:System) (r : Replica),
+    IsNonFaulty r ->
+      forall st:State, st = initState (r::sys) ->
+      (processRequestHelper (r::sys) st) = 
+          (prep (r , (multicast (prep (NFReplica, nil) st) nfrValue)) 
+            (processRequestHelper sys st)).
+Proof. intros. destruct r.
+  - inversion H.
+  - simpl. unfold NFReplicaFun. simpl. rewrite primaryNonFaulty. simpl.
+      remember (processRequestHelper sys st) as st2. rewrite (multicast_length st st2).
+      reflexivity.
+      rewrite Heqst2; clear. apply processHelper_stLen.
+Qed.
 
 Definition ProcessRequest (sys : System) : State :=
-  processRequestHelper sys (initState sys)
-.
+  processRequestHelper sys (initState sys).
 
 Lemma countNFR_IncNF : forall (sys:System) (r:Replica),
     IsNonFaulty r ->
-    S (countNFR_state (ProcessRequest sys)) = countNFR_state (ProcessRequest (r::sys)).
+    forall st:State, st = initState (r::sys) ->
+      countNFR_state (processRequestHelper (r::sys) st)
+          = S (countNFR_state (processRequestHelper sys st)).
 Proof. intros. destruct r.
   - inversion H.
-  - simpl. remember (initState (NFReplica :: sys)) as st.
-        remember (processRequestHelper sys st) as st'. 
-        unfold ProcessRequest. remember (initState sys) as st1.
-        remember (processRequestHelper sys st1) as st'1.
+  - reflexivity.
+Qed.
 
 Lemma stLen_sysLen : forall sys:System,
       stateLen (ProcessRequest sys) = systemLen sys.
@@ -175,15 +195,6 @@ match st with
     | prep (r, prepMsgs) t => groupMsgs prepMsgs (transposeState t)
     end.
 
-
-Lemma TState_NFRReplicasRow : forall (sys:System) (tst_row : list Message) (tst : list (list Message)),
-    (transposeState (ProcessRequest sys)) = tst_row::tst
-    -> countNFR_msgs tst_row = countNFR_state (ProcessRequest sys).
-Proof.
-  intros sys. induction sys.
-  - intros. inversion H. reflexivity.
-  - intros. destruct r.
-    + simpl.
 
 Definition qc_incPrePrep ( occ : nat ) (oppv : option nat) :=
   match oppv with
