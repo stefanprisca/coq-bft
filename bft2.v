@@ -22,126 +22,65 @@ Definition IsNonFaulty (r:Replica) :  Prop :=
 Print list.
 
 Inductive Message : Type := 
-| message: (nat * nat ) -> Message.
+| message: Replica -> nat -> Message.
 
-Notation "<< i ; n >>" := (message (i, n)).
+Notation "<< r ; n >>" := (message r n).
 
 Inductive State : Type :=
-| prePrep: nat -> (Replica * (list Message)) -> State
-| prep : nat -> (Replica * (list Message)) -> State -> State.
+| prePrep: (Replica * (list Message)) -> State
+| prep : (Replica * (list Message)) -> State -> State.
 
-Definition ReplicaFun := nat -> State -> State.
+Definition ReplicaFun := State -> State.
 
 Definition nfrValue := 0.
 Definition faultyValue := 100.
 Definition errorNotFound := 400.
 
-Fixpoint multicast (i : nat) (v:nat) :=
-  match i with
-  | 0 => [<<0;v>>]
-  | S i' => <<i;v>>::(multicast i' v)
+Fixpoint multicast (st:State) (v:nat) :=
+  match st with
+  | prePrep (P, _)  => [<<P;v>>]
+  | prep (r, _) t => <<r;v>>::(multicast t v)
   end.
 
-Fixpoint getMsgValueAtI (i : nat) (msgs : list Message) :=
-  match msgs with
-  | nil => None
-  | <<i';v>>::t => if (beq_nat i' i) then Some v
-                      else getMsgValueAtI i t
-end.
+Definition getMsgVal msg := match msg with | message r v => v end.
+Definition getMsgReplica msg := match msg with | message r v => r end.
 
-Definition beq_opt (on : option nat) (n : nat) :=
-match on with 
-| None => false
-| Some n' => beq_nat n' n
-end.
 
-Fixpoint getUniqueMsgVal (msgs:list Message) :=
-  match msgs with
-  | nil => None
-  | <<i;n>> :: t => if (beq_opt (getUniqueMsgVal t) n) then Some n
-                    else None
-  end.
-
-Inductive NFPrepConsistent : list Message -> Prop :=
-| nfpc_empty : NFPrepConsistent nil
-| nfpc_ind  : forall (msgs : list Message) ( i n : nat) (r : Replica),
-                IsNonFaulty r -> (getUniqueMsgVal msgs) = Some n
-                -> NFPrepConsistent (<<i;n>>::msgs).
-
-Lemma multicast_unique_nv: forall (nv : nat) (len : nat),
-    getUniqueMsgVal (multicast len nv ) = Some nv.
+Lemma multicast_nv: forall (nv : nat) (st:State),
+    Forall (fun m => eq (getMsgVal m) nv) (multicast st nv).
 Admitted.
 
-
-Lemma multicast_vAtI_nv: forall (nv : nat) (len : nat) (i: nat),
-    getMsgValueAtI i (multicast len nv) = Some nv.
-Admitted.
-
-Definition multicastOpt (on : option nat) (prePrepMsgs: list Message) :=
-match on with
-| None => nil
-| Some v => multicast (length prePrepMsgs) v
-end.
-
-Fixpoint genSequenceNumList (st:State) (i : nat): list Message :=
-    match st with
-    | prePrep r (P, prePrepMsgs) => 
-            multicastOpt (getMsgValueAtI i prePrepMsgs) prePrepMsgs
-    | prep _ _ t => genSequenceNumList t i
+Fixpoint getPrePrepValue (st:State) :=
+  match st with
+    | prePrep (P, <<_; v>>::pPrepMsgs) => Some v
+    | prePrep (P, _) => None
+    | prep _ t => getPrePrepValue t
     end.
-
-Inductive CliqList : list Message -> Prop :=
-| cliqL : forall (msgs: list Message),
-    ~(exists (i :nat), (getMsgValueAtI i msgs) = None) -> CliqList msgs.
-
 
 Inductive CliqState : State -> Prop :=
-| primary_cc : forall (msgs: list Message),
-      CliqList msgs
-      -> forall (pI:nat) (p:Replica), CliqState (prePrep pI (p, msgs))
-| replica_cc : forall (msgs: list Message),
-    CliqList msgs
-      -> forall (rI:nat) (r:Replica) (st : State), 
-        CliqState st -> CliqState(prep rI (r, msgs) st). 
+| cliqPrePrep : forall (st:State),
+    ~((getPrePrepValue st) = None) -> CliqState st.
 
+Lemma prePrepValue_constant : forall st:State, CliqState st ->
+    forall (a:Replica) (msgs:list Message),
+       getPrePrepValue (st) = getPrePrepValue (prep (a, msgs) st).
+Admitted.
 
+Definition optVal (on : option nat) :=
+ match on with
+  | None => faultyValue
+  | Some n => n
+  end.
 
+Definition NFReplicaFun (st:State) :=
+       prep (NFReplica, 
+            multicast (prep (NFReplica, nil) st) (optVal (getPrePrepValue st))) st.
 
-Fixpoint getPrePrepValue (st:State) (i : nat) :=
-match st with
-    | prePrep _ (P, pPrepMsgs) => (getMsgValueAtI i pPrepMsgs)
-    | prep _ _ t => getPrePrepValue t i
-    end.
+Compute (NFReplicaFun (prePrep (NFReplica, [<< NFReplica; 0 >>; << NFReplica; 0 >>]))).
 
-Fixpoint getPrePrepValues (st:State) :=
-  match st with
-    | prePrep _ (P, pPrepMsgs) => pPrepMsgs
-    | prep _ _ t => getPrePrepValues t
-    end.
-
-Lemma genSeqNumList_PrePrepValue : forall (i : nat) (st:State),
-  CliqState st ->
-  getUniqueMsgVal(genSequenceNumList st i) = getPrePrepValue st i.
-Proof. intros. induction H. induction H.
-  - simpl. remember (getMsgValueAtI i msgs) as mval. destruct mval.
-    + simpl. apply multicast_unique_nv.
-    + unfold not in H. repeat destruct H. exists i. rewrite Heqmval. reflexivity.
-  - simpl. apply IHCliqState.
-Qed.
-
-
-Definition NFReplicaFun (i : nat) (st:State) :=
-       prep i (NFReplica, (genSequenceNumList st i)) st.
-
-
-Fixpoint genFaultySequenceNumList (st:State) (i : nat): list Message :=
-    match st with
-    | prePrep _ (P, prePrepMsgs) => multicast (length prePrepMsgs) faultyValue
-    | prep _ (r, prepMsgs) t => multicast (length prepMsgs) faultyValue
-    end.
-
-Definition FaultyReplicaFun (i : nat) (st:State) :=
-       prep i (FaultyReplica, (genFaultySequenceNumList st i)) st.
+Definition FaultyReplicaFun (st:State) :=
+       prep (FaultyReplica, 
+              (multicast (prep (FaultyReplica, nil) st) faultyValue)) st.
 
 
 Definition GetReplicaFun (r:Replica) : ReplicaFun :=
@@ -150,16 +89,101 @@ Definition GetReplicaFun (r:Replica) : ReplicaFun :=
   | NFReplica => NFReplicaFun
   end.
 
+Definition System := list Replica.
 
-Inductive System : Type :=
-| primary : nat -> Replica -> System
-| replica : Replica -> System -> System.
+Fixpoint systemLen (sys:System) :=
+match sys with
+| nil => 0 
+| r::sys' => S (systemLen sys')
+end.
 
-Fixpoint ProcessRequest (sys : System) (i : nat) : State :=
-  match sys with
-  | primary len P =>  prePrep i (P, multicast len nfrValue)
-  | replica r sys' => ((GetReplicaFun r) i (ProcessRequest sys' (S i) )) 
+Fixpoint stateLen (st:State) :=
+match st with
+    | prePrep (P, _) => 1
+    | prep (r, prepMsgs) t => S (stateLen t)
+    end.
+
+
+Fixpoint countNFR_system (sys:System) :=
+match sys with
+  | nil => 0 
+  | NFReplica::sys' => S (countNFR_system sys')
+  | FaultyReplica::sys' => countNFR_system sys'
+end.
+
+
+Fixpoint countNFR_msgs msgs :=
+match msgs with
+| nil => 0
+| <<NFReplica;_>>::t => S (countNFR_msgs t)
+| _::t => countNFR_msgs t
+end.
+
+Definition countNFR_state (st:State) :=
+match st with
+  | prePrep (_, pPrepMsgs) => countNFR_msgs pPrepMsgs
+  | prep (_, prepMsgs) t => countNFR_msgs prepMsgs
+end.
+
+Axiom sysLen : forall (sys : System), exists F:nat, systemLen sys = 3*F+1.
+Axiom sysNofNFR : forall (sys : System), exists F:nat, countNFR_system sys = 2*F+1.
+
+Definition initState (sys : System) :=
+  prePrep (NFReplica, (map (fun r => <<r ; nfrValue>>) (NFReplica::sys))).
+
+Fixpoint processRequestHelper (sys : System) (st : State) :=
+match sys with
+  | nil =>  st
+  | r::sys' => (GetReplicaFun r) (processRequestHelper sys' st) 
   end.
+
+
+Definition ProcessRequest (sys : System) : State :=
+  processRequestHelper sys (initState sys)
+.
+
+Lemma countNFR_IncNF : forall (sys:System) (r:Replica),
+    IsNonFaulty r ->
+    S (countNFR_state (ProcessRequest sys)) = countNFR_state (ProcessRequest (r::sys)).
+Proof. intros. destruct r.
+  - inversion H.
+  - simpl. remember (initState (NFReplica :: sys)) as st.
+        remember (processRequestHelper sys st) as st'. 
+        unfold ProcessRequest. remember (initState sys) as st1.
+        remember (processRequestHelper sys st1) as st'1.
+
+Lemma stLen_sysLen : forall sys:System,
+      stateLen (ProcessRequest sys) = systemLen sys.
+Admitted.
+
+Fixpoint splitMsgs (msgs : list Message) :=
+match msgs with
+| nil => nil
+| m::t => [m] ++ (splitMsgs t)
+end.
+
+Fixpoint groupMsgs (newMsgs : list Message) (tst : list (list Message)) :=
+match newMsgs, tst with
+| nil, nil => nil
+| m::mt , tstH :: tstT => (m::tstH)::(groupMsgs mt tstT)
+| _, _ => nil
+end.
+
+Fixpoint transposeState (st:State) :=
+match st with
+    | prePrep (P, prePrepMsgs) => [(splitMsgs prePrepMsgs)]
+    | prep (r, prepMsgs) t => groupMsgs prepMsgs (transposeState t)
+    end.
+
+
+Lemma TState_NFRReplicasRow : forall (sys:System) (tst_row : list Message) (tst : list (list Message)),
+    (transposeState (ProcessRequest sys)) = tst_row::tst
+    -> countNFR_msgs tst_row = countNFR_state (ProcessRequest sys).
+Proof.
+  intros sys. induction sys.
+  - intros. inversion H. reflexivity.
+  - intros. destruct r.
+    + simpl.
 
 Definition qc_incPrePrep ( occ : nat ) (oppv : option nat) :=
   match oppv with
@@ -169,15 +193,21 @@ Definition qc_incPrePrep ( occ : nat ) (oppv : option nat) :=
   | None => (occ)
   end.
 
+Fixpoint countNFRValues (msgs:list Message) :=
+| match 
+
 (* Lemma forall i, replica i NF -> forall j, getMsgValueAtI = nfr. *)
+Definition countQuorumVotes (st' : State) (i:nat):=
+match st with
+    | prePrep _ (P, _) => S qc
+    | prep _ (r, prepMsgs) t => (GetQCertificate t i (qc_incPrePrep qc (getMsgValueAtI i prepMsgs)))
+    end.
+
 
 (* When the primary is correct, this should be the number of NF replicas in the system *)
 (* THIS is your connection to quorums *)
 Fixpoint GetQCertificate (st:State) (i:nat) (qc : nat) :=
-    match st with
-    | prePrep _ (P, _) => S qc
-    | prep _ (r, prepMsgs) t => (GetQCertificate t i (qc_incPrePrep qc (getMsgValueAtI i prepMsgs)))
-    end.
+    
 
 Fixpoint getLedgersHelper (st originalSt : State) :=
 match st with
