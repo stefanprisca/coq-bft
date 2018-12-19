@@ -10,6 +10,7 @@ Require Import String.
 Require Import Maps.
 Open Scope string_scope.
 
+
 Definition ReplicaId := string.
 
 Inductive Replica : Set :=
@@ -28,7 +29,6 @@ Definition ReplicaFun := total_map nat -> State -> State.
 
 Definition nfrValue := 0.
 Definition faultyValue := 100.
-Definition errorNotFound := 400.
 
 Fixpoint multicast (st:State) (v:nat) :=
   match st with
@@ -57,10 +57,18 @@ match st with
   | _::t => countNFR_state t
   end.
 
+Fixpoint countNFR_system (sys:System) :=
+match sys with
+  | nil  => 0
+  | (NFReplica _)::t => S (countNFR_system t)
+  | _::t => countNFR_system t
+  end.
+
+
 Fixpoint count_state (st:State) :=
 match st with
   | nil  => 0
-  | _::t => S (countNFR_state t)
+  | _::t => S (count_state t)
   end.
 
 
@@ -69,11 +77,6 @@ match sys with
   | nil  => 0
   | _::t => S (count_system t)
   end.
-
-Definition F := 10.
-Definition CompleteState (st:State) := count_state st = 3*F+1 /\ countNFR_state st = 2*F+1.
-Definition CompleteSystem (sys:System) := count_system sys = 3*F+1.
-Definition QuorumRequirement := 2*F+1.
 
 Definition initState (sys:list Replica) : State := ( (map (fun r => (r, nil)) sys)).
 
@@ -158,16 +161,18 @@ Qed.
 
 
 Inductive LedgerAgreement : (list nat) -> Prop :=
-| qcAgreement : forall (certs : list nat),
-          Forall (fun x => ~ (lt x QuorumRequirement)) certs 
+| qcAgreement : forall (certs : list nat) (qReq : nat),
+          Forall (fun x => ~ (lt x qReq)) certs 
             -> LedgerAgreement certs.
 
 Axiom LedgerAgreementEmpty : forall msgs st,
         LedgerAgreement (GatherCertificates (ReplicateRequest [] msgs st)).
 
 Lemma IncCertificates_MaintainsLedger : forall (certs : list nat),
-      LedgerAgreement certs -> LedgerAgreement (incCertificates certs).
-Proof. intros. induction H. constructor. induction certs.
+      LedgerAgreement certs 
+        -> LedgerAgreement (incCertificates certs).
+Proof. intros. induction H.
+    apply (qcAgreement (incCertificates certs) qReq). induction certs.
   - simpl. constructor.
   - simpl. inversion H. constructor.
     + unfold not. intros. rewrite <- H4 in H2. unfold not in H2. destruct H2.
@@ -175,12 +180,12 @@ Proof. intros. induction H. constructor. induction certs.
     + apply IHcerts. apply H3.
 Qed. 
 
-Lemma StateValid : forall (sys:System) (st:State) (msgs:total_map nat),
+Lemma BFT : forall (sys:System) (st:State) (msgs:total_map nat),
       PrePrepGte msgs sys /\ StateGte st sys ->
             LedgerAgreement (GatherCertificates (ReplicateRequest sys msgs st)).
 Proof.
   intros sys. induction sys.
-    + intros. apply LedgerAgreementEmpty.
+    + intros.  apply LedgerAgreementEmpty.
     + intros. destruct H. destruct a.
       - simpl. rewrite FaultyR_GatherCerts. apply IHsys.
       { split. 
@@ -188,11 +193,12 @@ Proof.
           - apply (StateGte_Ind st sys (FaultyReplica r)). assumption.
       }
       - simpl. 
-        rewrite (NFR_GatherCerts (ReplicateRequest sys msgs st) r msgs sys). 
-        apply IncCertificates_MaintainsLedger. apply IHsys.
-         { split. 
-            - apply (PrePrepGte_Ind msgs sys (NFReplica r)). assumption.
-            - apply (StateGte_Ind st sys (NFReplica r)). assumption.
-         }
-         { auto. }
+        rewrite (NFR_GatherCerts (ReplicateRequest sys msgs st) r msgs sys).
+        {
+            apply IncCertificates_MaintainsLedger. apply IHsys.
+            split. 
+                - apply (PrePrepGte_Ind msgs sys (NFReplica r)). assumption.
+                - apply (StateGte_Ind st sys (NFReplica r)). assumption.
+        }        
+        { auto. }
 Qed.
