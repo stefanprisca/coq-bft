@@ -1,4 +1,3 @@
-Require Import Coq.Arith.Arith.
 Require Import Coq.Bool.Bool.
 Require Export Coq.Strings.String.
 Require Import Coq.Classes.RelationClasses.
@@ -6,10 +5,9 @@ Require Import Coq.Lists.List.
 Import ListNotations.
 Require Import Maps.
 Require Import String.
-Require Import Maps.
 Open Scope string_scope.
 Require Import Coq.omega.Omega.
-
+Require PeanoNat.
 
 Definition ReplicaId := string.
 
@@ -169,18 +167,6 @@ Qed.
 Axiom PrimaryNonFaulty : forall (sys:System) (msgs : total_map nat),
      prePrepExt msgs sys -> forall (id : ReplicaId), msgs id = nfrValue.
 
-(* 
-Fixpoint nfrSubState (st:State) :=
-match st with
-  | nil => nil
-  | (NFReplica id, msgs)::t => (NFReplica id, msgs)::(nfrSubState t)
-  | _::t => (nfrSubState t)
-end.
-
-Lemma nfrSubstate_countCerts : forall (st:State),
-  GatherCertificates st = GatherCertificates (nfrSubState st).
-Admitted. *)
-
 Fixpoint countNFR_msgs msgs :=
 match msgs with
 | nil => 0
@@ -264,9 +250,12 @@ Proof. intros.
       apply multicast_nfrvInc. unfold prePrepExt. left. auto.
 Qed.
 
-Lemma S_predn : forall n, n = S (pred n). Admitted.
 Lemma appcons_comm : forall (A:Type) (l1 l2 : list A) (a : A),
-    app l1 (a::l2) = app (app l1 [a]) l2. Admitted.
+    app l1 (a::l2) = app (app l1 [a]) l2. intros.
+Proof. destruct l1; destruct l2; simpl; auto.
+  - rewrite <- app_assoc. rewrite app_nil_r. auto.
+  - rewrite <- app_assoc. simpl. auto.
+Qed.
 
 Lemma procReq_nfrInc: forall (sys :System) (st : State) (msgs : total_map nat),
     prePrepExt msgs sys ->
@@ -286,9 +275,9 @@ intros sys. remember (countNFR_system sys) as n. generalize dependent n. inducti
       }
     + simpl. simpl in Heqn. unfold NFReplicaFun. 
       rewrite (PrimaryNonFaulty (NFReplica r :: sys)).
-      { rewrite S_predn.
+      { rewrite Heqn.
         apply multicastNFV_nfrMsgsInc. apply IHsys.
-        - rewrite Heqn. rewrite pred_Sn. auto.
+        - auto.
         - destruct H.
           { unfold prePrepExt. right. exists [FaultyReplica r].  simpl. apply H. }
           { 
@@ -316,11 +305,12 @@ Definition msgsEq (n : nat) (r: (Replica * list nat)) :=
     match r with
     | (_, msgs) => countNFR_msgs msgs = n
     end.
-
+(* 
 Lemma gte_plus : forall n m: nat, m + n >= n.
-Admitted.
+Proof. intros. induction n; induction m; Omega.omega.
+Qed. *)
 
-Lemma bipbobap : forall (st base : State) (r:Replica) (lr: list nat) (n : nat), 
+Lemma nfrMsgsInc_base_ind : forall (st base : State) (r:Replica) (lr: list nat) (n : nat), 
     Forall (msgsEq 0) (((r, lr) :: base))
       -> (nfrMsgsIncrementedBy st base n) = (nfrMsgsIncrementedBy st ((r, lr) :: base) n).
 Proof. intros st. induction st. auto.
@@ -336,7 +326,7 @@ Proof. intros st. induction st. auto.
 Qed.
 
 
-Lemma bibop : forall (st base : State) (n : nat), 
+Lemma nfrMsgsInc_base0 : forall (st base : State) (n : nat), 
          Forall (msgsEq 0) (base)
               -> nfrMsgsIncrementedBy st base n = nfrMsgsIncrementedBy st [] n.
 Proof.
@@ -344,23 +334,28 @@ Proof.
     - auto.
     - induction st. auto. destruct a. destruct x. simpl.
       simpl in H0. rewrite H0. simpl. rewrite <- IHst. 
-      rewrite (bipbobap st l r0 l1 n) . auto.  
+      rewrite (nfrMsgsInc_base_ind st l r0 l1 n) . auto.  
       subst. apply H.
 Qed.
 
-Lemma bibapa : forall (st base : State) (r : Replica) (l : list nat) (n : nat),
-  nfrMsgsIncrementedBy ((r, l) :: st) base n -> countNFR_msgs l >= n. Admitted.
+Lemma nfrMsgsInc_baseCount : forall (st base : State) (r : Replica) (l : list nat) (n : nat),
+  nfrMsgsIncrementedBy ((r, l) :: st) base n -> countNFR_msgs l >= n. 
+intros. induction base.
+  - simpl in H. Omega.omega.
+  - destruct a. simpl in H. Omega.omega.
+Qed.
 
 Lemma nfrIncN_nfrMsgs : forall (st base: State) (n : nat),
   Forall (msgsEq 0) (base)
    -> nfrMsgsIncrementedBy st base n
     -> Forall (msgsGte n) st.
 Proof. intros st base n HBase H. induction st. auto. constructor.
-  - destruct a. simpl. apply (bibapa st base r l n). apply H.
+  - destruct a. simpl. apply (nfrMsgsInc_baseCount st base r l n). apply H.
   - apply IHst; clear IHst. destruct base.
     + destruct a. induction H. apply H0.
     + destruct a. destruct p. induction H.
-      inversion HBase. rewrite bibop. rewrite bibop in H0. 
+      inversion HBase. rewrite nfrMsgsInc_base0. 
+      rewrite nfrMsgsInc_base0 in H0. 
       { apply H0. } { apply H4. } { subst. constructor; assumption. }
 Qed.
 
@@ -374,11 +369,17 @@ Proof.
       apply (nfrIncN_nfrMsgs st base n). apply H. apply H0.
 Qed.
 
-Lemma BFT : forall (sys:System),
+Lemma initSt_msgEq0 : forall sys, Forall (msgsEq 0) (initState sys).
+Proof. intros. unfold initState. induction sys.
+  - simpl. constructor.
+  - simpl. constructor; simpl; auto.
+Qed. 
+
+Theorem BFT : forall (sys:System),
       LedgerAgreement (ReplicateRequest sys (prePrep sys) (initState sys)).
 Proof.
   intros. 
     apply (quorumCertifiedState (ReplicateRequest sys (prePrep sys) (initState sys)) (initState sys)).
-    - admit.
+    - apply initSt_msgEq0.
     - rewrite <- countNFR_state_system. apply procReq_nfrInc. apply prePrepExt_refl.
-Admitted.
+Qed.
