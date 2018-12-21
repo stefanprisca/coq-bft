@@ -86,8 +86,6 @@ Definition newPrePrep (msgs : total_map nat) (r: Replica) : total_map nat :=
 
 Definition prePrep (sys:list Replica) := 
     ( (fold_left newPrePrep sys (t_empty nfrValue) )).
-Compute prePrep [(FaultyReplica "0"); (NFReplica "1")].
-
 
 Fixpoint ReplicateRequest (sys : System) (msgs: total_map nat) (st : State):=
 match sys with
@@ -147,15 +145,6 @@ Proof. intros. induction sys.
                                   ((NFReplica r, []) :: initState sys)).
       auto.
 Qed.
-
-
-Definition CorrectSystem (sys:System) := 
-    exists F,
-    (count_system sys = 3*F+1) /\ (countNFR_system sys = 2*F+1).
-
-Definition CorrectState (st:State) := 
-    exists F,
-    (count_state st = 3*F+1) /\ (countNFR_state st = 2*F+1).
 
 Definition prePrepExt (msgs : total_map nat) (sys:System) := 
     msgs = prePrep sys \/ exists sys', msgs = prePrep (app sys' sys).
