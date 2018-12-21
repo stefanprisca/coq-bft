@@ -97,13 +97,6 @@ match sys with
   | (r::sys') => (GetReplicaFun r) msgs (ReplicateRequest sys' msgs st)
   end.
 
-Fixpoint countNFR_msgs msgs :=
-match msgs with
-| nil => 0
-| v::t => if (beq_nat v nfrValue) then ( (countNFR_msgs t ) + 1)
-          else (countNFR_msgs t )
-end.
-
 Lemma faultyR_countNFR : forall (st:State) (id:ReplicaId) (prePrep : total_map nat),
        countNFR_state (FaultyReplicaFun id prePrep st) = countNFR_state st.
 Proof. intros.
@@ -181,13 +174,21 @@ Lemma nfrSubstate_countCerts : forall (st:State),
   GatherCertificates st = GatherCertificates (nfrSubState st).
 Admitted. *)
 
+Fixpoint countNFR_msgs msgs :=
+match msgs with
+| nil => 0
+| v::t => if (beq_nat v nfrValue) then ( (countNFR_msgs t ) + 1)
+          else (countNFR_msgs t )
+end.
+
 Fixpoint nfrMsgsIncrementedBy (st1 st2 : State) (n : nat) :=
 match st1, st2 with
+| nil, _ => True
+| (_, m1)::t1 , nil => (countNFR_msgs m1) = n /\ nfrMsgsIncrementedBy t1 nil n
 | (_, m1)::t1, (_, m2)::t2 => (countNFR_msgs m1) = ((countNFR_msgs m2) + n)
                                 /\ nfrMsgsIncrementedBy t1 t2 n
-| (_, m1)::t1, _ => (countNFR_msgs m1) = n
-| _, _ => True
 end.
+
 (* 
 Lemma multicast_nfrvInc : forall (st : State),
     nfrMsgsIncrementedBy (multicast st nfrValue) st 1.
@@ -225,11 +226,11 @@ Lemma multicastNFV_nfrMsgsInc : forall (st base : State) (n:nat),
 Proof. intros st. induction st; intros; destruct base.
   - simpl. auto.
   - simpl. auto.
-  - destruct a. simpl in H. simpl. rewrite H. apply n_Sn.
-  - destruct a. destruct p. simpl in H. simpl. destruct H. split.
-    + rewrite H. symmetry. rewrite <- n_Sn. rewrite plus_assoc. auto.
+  - destruct a. simpl in H. simpl. destruct H. admit.
+  - destruct a. destruct p. simpl in H. destruct H. simpl. split.
+    + symmetry. rewrite <- n_Sn. rewrite plus_assoc. rewrite H. auto.
     + apply IHst. apply H0.
-Qed. 
+Admitted. 
  
 
 Lemma multicastFV_nfrMsgsConst : forall (st base : State) (n:nat),
@@ -239,10 +240,10 @@ Proof.
 intros st. simpl. induction st.
   - intros. simpl. auto.
   - intros. destruct a. destruct base.
-    + simpl. simpl in H. apply H.
-    + destruct p. simpl. simpl in H. split.
-      { apply H. } { apply IHst. apply H. } 
-Qed.
+    + simpl. simpl in H. admit.
+    + destruct p. simpl. simpl in H. destruct H. split.
+      { apply H. } { apply IHst. apply H0. } 
+Admitted.
 
 Lemma replicateReq_nfrMsgsTrans : forall sys,
     nfrMsgsIncrementedBy
@@ -254,14 +255,49 @@ Lemma replicateReq_nfrMsgsTrans : forall sys,
              ((r, []) :: initState sys))
              ((r, []) :: initState sys) (countNFR_system sys).
 Proof. Admitted.
+ 
+Lemma blublap: forall (st base : State) (r1 r2 : Replica) (l1 l2 : list nat) (n : nat),
+  nfrMsgsIncrementedBy ((r1, l1) :: st) ((r2, l2) :: base) n
+  -> countNFR_msgs l2 = (countNFR_msgs l1) - n.
+Admitted.
 
+(* 
+Lemma nfr_nfrEq : forall (st base : State) (r : ReplicaId)  (l :list nat),
+  nfrMsgsIncrementedBy st ((NFReplica r, l) :: base) (countNFR_state st)
+    -> nfrMsgsIncrementedBy st base (S (countNFR_state st)).
+Proof. intros. induction st.
+  - simpl. auto.
+  - destruct a. inversion H. destruct base.
+    + simpl. auto.
+    + destruct r0; destruct p eqn:eqd.
+      { simpl. split. 
+        - simpl in H0. simpl in H1. rewrite H0.
+Admitted. *)
+(* 
 
 Lemma nfrIncrementTrans : forall (st base:State) (r:Replica) (msgs : list nat),
-   nfrMsgsIncrementedBy ((r, msgs) :: st) base
-      (countNFR_state ((r, msgs) :: st))
-    -> nfrMsgsIncrementedBy (st) base
-      (countNFR_state (st)).
-Proof. intros. Admitted.
+    countNFR_msgs msgs = countNFR_state ((r, msgs) :: st) 
+    ->
+      nfrMsgsIncrementedBy (st) base
+        (countNFR_state (st))
+       <-> nfrMsgsIncrementedBy ((r, msgs) :: st) base
+          (countNFR_state ((r, msgs) :: st)).
+Proof. intros. split.
+  - intros. destruct r.
+    + simpl. destruct base; auto. destruct p. simpl in H0. split.
+      { simpl in H. admit. } 
+      { simpl in H. admit. }
+    + destruct base. 
+      { simpl. auto. }
+      { destruct p. simpl. simpl in H. destruct r0. 
+        - split.
+          + admit.
+          + admit.
+        - split.
+          + admit.
+          + admit.
+       }
+  - intros. Admitted. *)
 
 Lemma procReq_nfrInc: forall (sys :System),
     nfrMsgsIncrementedBy (ReplicateRequest sys (prePrep sys) ( initState sys))
@@ -290,7 +326,7 @@ Definition quorumCertified (nfrSS : State) (r: (Replica * list nat)) :=
 Definition LedgerAgreement (st : State) := Forall (quorumCertified st) st.
 
 Lemma gt_Sn_n : forall (n m : nat), n >= S m -> n >= m. Admitted.
-
+(* 
 Lemma fR_LA : forall (r:ReplicaId) (l : list nat) (st:State),
   LedgerAgreement st -> LedgerAgreement ((FaultyReplica r, l) :: st).
 Proof. intros. unfold LedgerAgreement. constructor.
@@ -298,30 +334,60 @@ Proof. intros. unfold LedgerAgreement. constructor.
   - unfold LedgerAgreement in H. unfold quorumCertified. simpl. apply H.
 Qed.
 
-Lemma nfR_LA : forall (r:ReplicaId) (l : list nat) (st:State),
-  countNFR_msgs l = S (countNFR_state st) ->
+Lemma nfR_LA : forall (st:State) (r:ReplicaId) (l : list nat),
   LedgerAgreement st -> LedgerAgreement ((NFReplica r, l) :: st).
-Proof. intros. unfold LedgerAgreement. constructor.
-  - simpl. rewrite H. auto.
-  - simpl.
+Proof. 
+Admitted. *)
+
+
+Definition msgsGte (n : nat) (r: (Replica * list nat)) :=
+    match r with
+    | (FaultyReplica _, _) => True
+    | (NFReplica _, msgs) => countNFR_msgs msgs >= n
+    end.
+
+
+Definition msgsEq (n : nat) (r: (Replica * list nat)) :=
+    match r with
+    | (FaultyReplica _, _) => True
+    | (NFReplica _, msgs) => countNFR_msgs msgs = n
+    end.
+
+Lemma blublap1 : forall (st base : State) (l l0 : list nat) (n : nat)  (r r0 : Replica),
+  Forall (msgsEq 0) ((r0, l0) :: base)
+  -> nfrMsgsIncrementedBy ((r, l) :: st) ((r0, l0) :: base) n
+  -> nfrMsgsIncrementedBy st ((r0, l0) :: base) n.
+Proof. intros. induction H.
+  - induction H0. auto.
+  - intros. destruct x. induction H0. destruct st.
+    + simpl. auto.
+    + admit.
+Admitted.
+
+Lemma nfrIncN_nfrMsgs : forall (st base: State) (n : nat),
+  nfrMsgsIncrementedBy st base n
+    -> Forall (msgsGte n) st.
+Proof. intros st. induction st.
+  - constructor.
+  - intros. constructor.
+    + destruct a. simpl in H. simpl. destruct base.
+      { destruct H. rewrite H. destruct r; auto. }
+      { destruct p. destruct H. rewrite H. admit. }
+    + apply (IHst base n). destruct base.
+      { destruct a. induction H. apply H0. }
+      { 
+        destruct a. destruct p.  apply (blublap1 st base l l0 n r r0).
+        { admit. } { apply H. }
+      }
+Admitted.
 
 Lemma quorumCertifiedState : forall (st base : State),
     nfrMsgsIncrementedBy st base (countNFR_state st)
     -> LedgerAgreement st.
 Proof.
-  intros. induction st; intros; destruct base.
-    - constructor.
-    - constructor.
-    - destruct a. destruct r.
-          + apply fR_LA. apply IHst; clear IHst.
-            apply (nfrIncrementTrans st  [] (FaultyReplica r) l). apply H.
-          + simpl in H. apply nfR_LA. apply IHst; clear IHst.
-            apply (nfrIncrementTrans st  [] (NFReplica r) l). apply H.
-    - destruct a. destruct r.
-          + apply fR_LA. apply IHst; clear IHst.
-            apply (nfrIncrementTrans st  (p :: base) (FaultyReplica r) l). apply H.
-          + apply nfR_LA. apply IHst; clear IHst.
-            apply (nfrIncrementTrans st  (p :: base) (NFReplica r) l). apply H.
+  intros. unfold LedgerAgreement. unfold quorumCertified. 
+      remember (countNFR_state (st)) as n. 
+      apply (nfrIncN_nfrMsgs st base n). apply H.
 Qed.
 
 Lemma BFT : forall (sys:System),
