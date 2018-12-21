@@ -1,290 +1,385 @@
-Require Import Coq.Arith.Arith.
 Require Import Coq.Bool.Bool.
 Require Export Coq.Strings.String.
-Require Import Coq.Logic.FunctionalExtensionality.
+Require Import Coq.Classes.RelationClasses.
 Require Import Coq.Lists.List.
 Import ListNotations.
-Require Import String.
 Require Import Maps.
+Require Import String.
 Open Scope string_scope.
-
-
-Definition FNum := 2.
-Definition QuorumAcceptanceThreshold := 2*FNum + 1.
-Definition MaxMessages := 1000.
-
+Require Import Coq.omega.Omega.
+Require PeanoNat.
 
 Definition ReplicaId := string.
-Definition SysView := string.
 
-Inductive Message : Type := 
-| reqMsg: string -> ReplicaId -> Message
-| pPrepMsg: string -> nat -> ReplicaId -> Message
-| prepMsg: string -> nat -> ReplicaId -> Message.
+Inductive Replica : Set :=
+| FaultyReplica : ReplicaId -> Replica
+| NFReplica : ReplicaId -> Replica.
 
-Notation "<<REQ digest , rId >>" := (reqMsg digest rId).
-Notation "<<PPREP digest , seqNum , rId >>" := (pPrepMsg digest seqNum rId).
-Notation "<<PREP digest , seqNum , rId >>" := (prepMsg digest seqNum rId).
-
-
-Definition GetRID (msg : Message) : ReplicaId :=
-  match msg with
-  | reqMsg digest rId => rId
-  | pPrepMsg digest seqNum rId => rId
-  | prepMsg digest seqNum rId => rId
+Definition IsNonFaulty (r:Replica) :  Prop :=
+  match r with 
+    | FaultyReplica _ => False
+    | NFReplica _ => True
   end.
 
-Definition GetDigest (msg : Message) : string :=
-  match msg with
-  | reqMsg digest rId => digest
-  | pPrepMsg digest seqNum rId => digest
-  | prepMsg digest seqNum rId => digest
+Definition State := list (Replica * (list nat)).
+
+Definition ReplicaFun := total_map nat -> State -> State.
+
+Definition nfrValue := 0.
+Definition faultyValue := 100.
+
+Fixpoint multicast (st:State) (v:nat) :=
+  match st with
+  | nil  => nil
+  | (r, msgs)::t => (r, v::msgs)::(multicast t v)
   end.
 
-Definition Ledger := list (string * nat).
-Definition EmptyLedger : Ledger :=  nil.
+Definition NFReplicaFun (id : ReplicaId) (msgs: total_map nat) (st:State) :=
+       multicast st (msgs id).
 
-Fixpoint beq_ledgers (l1 l2 : Ledger) :=
-match l1 with
-| nil => match l2 with
-          | nil => true
-          | _ => false
-         end
-| (s1, n1)::t => match l2 with
-          | nil => false
-          | (s2, n2)::t2 => andb (andb (beq_string s1 s2) (beq_nat n1 n2)) (beq_ledgers t t2)
-         end
+Definition FaultyReplicaFun (id : ReplicaId) (msgs: total_map nat) (st:State) :=
+       multicast st faultyValue.
+
+Definition GetReplicaFun (r:Replica) : ReplicaFun :=
+  match r with
+  | FaultyReplica id => FaultyReplicaFun id
+  | NFReplica id => NFReplicaFun id
+  end.
+
+Definition System := list Replica.
+
+Fixpoint countNFR_state (st:State) :=
+match st with
+  | nil  => 0
+  | (NFReplica _, _)::t => S (countNFR_state t)
+  | _::t => countNFR_state t
+  end.
+
+Fixpoint countNFR_system (sys:System) :=
+match sys with
+  | nil  => 0
+  | (NFReplica _)::t => S (countNFR_system t)
+  | _::t => countNFR_system t
+  end.
+
+
+Fixpoint count_state (st:State) :=
+match st with
+  | nil  => 0
+  | _::t => S (count_state t)
+  end.
+
+
+Fixpoint count_system (sys:System) :=
+match sys with
+  | nil  => 0
+  | _::t => S (count_system t)
+  end.
+
+Definition initState (sys:list Replica) : State := ( (map (fun r => (r, nil)) sys)).
+
+Definition newPrePrep (msgs : total_map nat) (r: Replica) : total_map nat := 
+    match r with 
+    | NFReplica id => msgs & {id --> nfrValue}
+    | FaultyReplica id => msgs & {id --> nfrValue}
+    end.
+
+Definition prePrep (sys:list Replica) := 
+    ( (fold_left newPrePrep sys (t_empty nfrValue) )).
+Compute prePrep [(FaultyReplica "0"); (NFReplica "1")].
+
+
+Fixpoint ReplicateRequest (sys : System) (msgs: total_map nat) (st : State):=
+match sys with
+  | nil => st
+  | (r::sys') => (GetReplicaFun r) msgs (ReplicateRequest sys' msgs st)
+  end.
+
+Lemma faultyR_countNFR : forall (st:State) (id:ReplicaId) (prePrep : total_map nat),
+       countNFR_state (FaultyReplicaFun id prePrep st) = countNFR_state st.
+Proof. intros.
+  induction st.
+    - reflexivity.
+    - destruct a. destruct r; simpl; rewrite <- IHst; reflexivity.
+Qed.
+
+Lemma nfR_countNFR : forall (st:State) (id:ReplicaId)
+                            (prePrep : total_map nat),
+       countNFR_state (NFReplicaFun id prePrep st) = countNFR_state st.
+Proof. intros.
+  induction st.
+    - simpl. reflexivity.
+    - destruct a. destruct r; simpl; rewrite <- IHst; reflexivity.
+Qed.
+
+Lemma initSt_nfrTrans : forall (sys:System),
+    countNFR_state (initState sys) = countNFR_system sys.
+Proof.
+intros. induction sys.
+  - auto.
+  - destruct a; simpl; rewrite IHsys; auto.
+Qed.
+
+Lemma replicate_nfrTrans : forall (sys:System) (msgs : total_map nat) (st:State) ,
+   countNFR_state (ReplicateRequest sys msgs st) = countNFR_state st.
+Proof. intros sys. induction sys.
+  - auto.
+  - destruct a.
+    + intros. simpl. rewrite faultyR_countNFR. apply IHsys.
+    + intros. simpl. rewrite nfR_countNFR. apply IHsys.
+Qed.
+
+Lemma countNFR_state_system : forall sys:System,
+    countNFR_system sys = countNFR_state (ReplicateRequest sys (prePrep sys) (initState sys)).
+Proof. intros. induction sys.
+  - reflexivity.
+  - destruct a.
+    + simpl. rewrite IHsys. 
+      rewrite (replicate_nfrTrans sys (prePrep sys) (initState sys)).
+      rewrite faultyR_countNFR.
+      rewrite (replicate_nfrTrans sys (prePrep (FaultyReplica r :: sys))
+                                  ((FaultyReplica r, []) :: initState sys)).
+      auto.
+    + simpl. rewrite IHsys. 
+      rewrite (replicate_nfrTrans sys (prePrep sys) (initState sys)).
+      rewrite nfR_countNFR.
+      rewrite (replicate_nfrTrans sys (prePrep (NFReplica r :: sys))
+                                  ((NFReplica r, []) :: initState sys)).
+      auto.
+Qed.
+
+
+Definition CorrectSystem (sys:System) := 
+    exists F,
+    (count_system sys = 3*F+1) /\ (countNFR_system sys = 2*F+1).
+
+Definition CorrectState (st:State) := 
+    exists F,
+    (count_state st = 3*F+1) /\ (countNFR_state st = 2*F+1).
+
+Definition prePrepExt (msgs : total_map nat) (sys:System) := 
+    msgs = prePrep sys \/ exists sys', msgs = prePrep (app sys' sys).
+
+Lemma prePrepExt_refl : forall sys, prePrepExt(prePrep sys) sys.
+  Proof. intros. unfold prePrepExt. left. auto.
+Qed.
+
+Axiom PrimaryNonFaulty : forall (sys:System) (msgs : total_map nat),
+     prePrepExt msgs sys -> forall (id : ReplicaId), msgs id = nfrValue.
+
+Fixpoint countNFR_msgs msgs :=
+match msgs with
+| nil => 0
+| v::t => if (beq_nat v nfrValue) then ( (countNFR_msgs t ) + 1)
+          else (countNFR_msgs t )
 end.
 
-Definition SysState := total_map Ledger.
-Definition MessageBox := list Message.
-
-
-Inductive QCert : Type :=
-| qCert : string -> nat -> QCert.
-
-Definition QCerts := total_map (list QCert).
-
-Definition EmptyQCerts : QCerts := fun _ => nil.
-
-Inductive ExecEnvironment : Type :=
-| execEnv : list ReplicaId -> SysState -> QCerts -> MessageBox -> ExecEnvironment.
-
-
-Definition GetEnvState (env : ExecEnvironment) := 
-  match env with
-  | execEnv _ state _ _  => state
-  end.
-
-Definition GetEnvReplicas (env : ExecEnvironment) := 
-  match env with
-  | execEnv replicas _ _ _  => replicas
-  end.
-
-
-Definition GetEnvMsgBox (env : ExecEnvironment) := 
-  match env with
-  | execEnv _ _ _  mb => mb
-  end.
-
-Definition GetEnvQCerts (env : ExecEnvironment) := 
-  match env with
-  | execEnv _ _ qcs _ => qcs
-  end.
-
-Definition Replica := ExecEnvironment -> Message -> ExecEnvironment.
-
-Definition SysReplicas := list (ReplicaId * Replica).
-
-Inductive System : Type := 
-  | system : SysView -> SysState -> SysReplicas -> System.
-
-Definition GetView (sys : System) := 
-  match sys with
-  | system view _ _ => view
-  end.
-
-Definition GetState (sys : System) := 
-  match sys with
-  | system _ state _ => state
-  end.
-
-Fixpoint getReplicaIdsHelper (replicas : SysReplicas) (result : list ReplicaId) :=
-  match replicas with
-  | nil => result
-  | (rId, _)::t => rId::(getReplicaIdsHelper t result)
-  end.
-
-Definition GetReplicaIds (sys : System) := 
-  match sys with
-  | system _ _ replicas => (getReplicaIdsHelper replicas nil)
-  end.
-
-
-Definition GetReplicas (sys : System) := 
-  match sys with
-  | system _ _ replicas => replicas
-  end.
-
-Fixpoint findReplicaHelper (replicas : SysReplicas) (rId : ReplicaId) :=
-match replicas with
-| nil => None
-| (rId', r)::t => if beq_string rId rId' then (Some r)
-                  else findReplicaHelper t rId
+Fixpoint nfrMsgsIncrementedBy (st1 st2 : State) (n : nat) :=
+match st1, st2 with
+| nil, _ => True
+| (_, m1)::t1 , nil => (countNFR_msgs m1) = n /\ nfrMsgsIncrementedBy t1 nil n
+| (_, m1)::t1, (_, m2)::t2 => (countNFR_msgs m1) = ((countNFR_msgs m2) + n)
+                                /\ nfrMsgsIncrementedBy t1 t2 n
 end.
 
-Definition FindReplica (sys : System) (rId:ReplicaId) :=
-let replicas := GetReplicas sys in
-  findReplicaHelper replicas rId.
+Lemma nfrMsgsInc_reflexive: forall st:State,
+    nfrMsgsIncrementedBy st st 0.
+Proof.
+  intros. induction st.
+  - simpl. auto.
+  - destruct a. simpl. split.
+    + auto.
+    + apply IHst.
+Qed.
+
+Lemma n_Sn : forall n:nat,
+  n + 1 = S n.
+Proof.
+  apply nat_ind.
+  - reflexivity.
+  - simpl. intros. rewrite H. reflexivity.
+Qed.
+
+Lemma multicastNFV_nfrMsgsInc : forall (st base : State) (n:nat),
+    nfrMsgsIncrementedBy st base n
+      -> nfrMsgsIncrementedBy (multicast st nfrValue) base ( S n ).
+Proof. intros st. induction st; intros; destruct base.
+  - simpl. auto.
+  - simpl. auto.
+  - destruct a. simpl in H. simpl. destruct H. split.
+    + rewrite H. rewrite n_Sn. auto.
+    + apply IHst. apply H0.
+  - destruct a. destruct p. simpl in H. destruct H. simpl. split.
+    + symmetry. rewrite <- n_Sn. rewrite plus_assoc. rewrite H. auto.
+    + apply IHst. apply H0.
+Qed. 
+ 
+
+Lemma multicastFV_nfrMsgsConst : forall (st base : State) (n:nat),
+nfrMsgsIncrementedBy st base n
+      -> nfrMsgsIncrementedBy (multicast st faultyValue) base n.
+Proof.
+intros st. simpl. induction st.
+  - intros. simpl. auto.
+  - intros. destruct a. destruct base.
+    + simpl. simpl in H. split.
+      { apply H. } { apply IHst. apply H. }
+    + destruct p. simpl. simpl in H. destruct H. split.
+      { apply H. } { apply IHst. apply H0. } 
+Qed.
+
+Lemma multicast_nfrvInc : forall (st : State),
+    nfrMsgsIncrementedBy (multicast st nfrValue) st 1.
+Proof.
+intros. induction st.
+- reflexivity.
+- destruct a. simpl. split. { auto. } { assumption. }
+Qed.
 
 
-Definition EmptyState : SysState :=  (fun _ => EmptyLedger).
-Definition EmptyReplicas : SysReplicas :=  nil.
+Lemma nfrIncNfrMsgs : forall (sys : System) (r:Replica),
+IsNonFaulty r 
+  -> nfrMsgsIncrementedBy (ReplicateRequest (r::sys) (prePrep (r::sys)) ( initState (r::sys) ))
+                  (ReplicateRequest (sys) (prePrep (r::sys)) ( initState (r::sys) ))
+                  1.
+Proof. intros.
+  destruct r.
+    - inversion H.
+    - simpl. unfold NFReplicaFun. 
+      rewrite (PrimaryNonFaulty (NFReplica r :: sys) (prePrep (NFReplica r :: sys))). 
+      apply multicast_nfrvInc. unfold prePrepExt. left. auto.
+Qed.
 
-Fixpoint multicast (from : ReplicaId) (replicas : list ReplicaId) (msgTo : ReplicaId -> Message) (mBox : MessageBox) : MessageBox :=
-  match replicas with
-  | nil => mBox
-  | rId::t => if (beq_string rId from) then multicast from t msgTo mBox
-              else (msgTo rId)::(multicast from t msgTo mBox)
-  end.
+Lemma appcons_comm : forall (A:Type) (l1 l2 : list A) (a : A),
+    app l1 (a::l2) = app (app l1 [a]) l2. intros.
+Proof. destruct l1; destruct l2; simpl; auto.
+  - rewrite <- app_assoc. rewrite app_nil_r. auto.
+  - rewrite <- app_assoc. simpl. auto.
+Qed.
 
-Definition pushCertificate (qCerts : QCerts) (rId : ReplicaId) (qCert : QCert) : QCerts :=
-  qCerts & {rId --> qCert::(qCerts rId)}.
+Lemma procReq_nfrInc: forall (sys :System) (st : State) (msgs : total_map nat),
+    prePrepExt msgs sys ->
+    nfrMsgsIncrementedBy (ReplicateRequest sys msgs st)
+                            st
+                            (countNFR_system sys).
+Proof.
+intros sys. remember (countNFR_system sys) as n. generalize dependent n. induction sys.
+  - simpl. intros. simpl in Heqn. rewrite Heqn. apply nfrMsgsInc_reflexive.
+  - intros. simpl. destruct a.
+    + simpl. simpl in Heqn. unfold FaultyReplicaFun. apply multicastFV_nfrMsgsConst.
+      apply IHsys. apply Heqn. destruct H.
+      { unfold prePrepExt. right. exists [FaultyReplica r].  simpl. apply H. }
+      { 
+        unfold prePrepExt. right. inversion H. 
+        rewrite appcons_comm in H0. exists (app x [FaultyReplica r]). apply H0.
+      }
+    + simpl. simpl in Heqn. unfold NFReplicaFun. 
+      rewrite (PrimaryNonFaulty (NFReplica r :: sys)).
+      { rewrite Heqn.
+        apply multicastNFV_nfrMsgsInc. apply IHsys.
+        - auto.
+        - destruct H.
+          { unfold prePrepExt. right. exists [FaultyReplica r].  simpl. apply H. }
+          { 
+            unfold prePrepExt. right. inversion H. 
+            rewrite appcons_comm in H0. exists (app x [NFReplica r]). apply H0.
+          }
+      }
+      { apply H. }
+Qed.
 
-Fixpoint seqNumAccepted (l:Ledger) (n:nat) :=
-    match l with
-    | nil => false
-    | (_, v)::t => orb (beq_nat n v) (seqNumAccepted t n)
+Definition quorumCertified (nfrSS : State) (r: (Replica * list nat)) :=
+    match r with
+    | (_, msgs) => countNFR_msgs msgs >= countNFR_state nfrSS
     end.
 
-Fixpoint hasEnoughQCerts (qCertL : list QCert) (digest : string) (seqNum collected : nat) :=
-    match qCertL with
-    | nil => beq_nat collected QuorumAcceptanceThreshold
-    | (qCert d v)::t => if (andb (beq_string digest d) (beq_nat v seqNum)) then
-                           hasEnoughQCerts t digest seqNum (S collected)
-                        else
-                            hasEnoughQCerts t digest seqNum collected
+Definition LedgerAgreement (st : State) := Forall (quorumCertified st) st.
+
+Definition msgsGte (n : nat) (r: (Replica * list nat)) :=
+    match r with
+    | (_, msgs) => countNFR_msgs msgs >= n
     end.
 
-Definition isQuorumCertified (qCertsL : list QCert) (digest : string) (seqNum : nat):=
-    hasEnoughQCerts qCertsL digest seqNum 0.
 
-Definition pushSequenceNum (st : SysState) (rId : ReplicaId) (digest : string) (seqNum : nat) :=
-    st & {rId --> (digest, seqNum)::(st rId)}.
-
-Definition genSeqNum (l : Ledger) :=
-    match l with
-      | nil => 0
-      | (d, v)::t => S v
+Definition msgsEq (n : nat) (r: (Replica * list nat)) :=
+    match r with
+    | (_, msgs) => countNFR_msgs msgs = n
     end.
+(* 
+Lemma gte_plus : forall n m: nat, m + n >= n.
+Proof. intros. induction n; induction m; Omega.omega.
+Qed. *)
 
-Definition NFReplica : Replica := 
-  fun env msg => 
-      match msg with
-      | (reqMsg digest rId) => let n := (genSeqNum ((GetEnvState env) rId)) in
-                                let mb' := (multicast rId (GetEnvReplicas env) (pPrepMsg digest n) (GetEnvMsgBox env)) in
-                                  let qCerts' := (pushCertificate (GetEnvQCerts env) rId (qCert digest n)) in
-                                    execEnv (GetEnvReplicas env) (GetEnvState env) qCerts' mb'
-      | (pPrepMsg digest n rId) => if (seqNumAccepted ((GetEnvState env) rId) n) then
-                                        env
-                                   else
-                                      let mb' := (multicast rId (GetEnvReplicas env) (prepMsg digest n) (GetEnvMsgBox env)) in
-                                      let qCerts' := (pushCertificate (GetEnvQCerts env) rId (qCert digest n)) in
-                                        if (isQuorumCertified (qCerts' rId) digest n) then
-                                           let state' := (pushSequenceNum (GetEnvState env) rId digest n) in
-                                              execEnv (GetEnvReplicas env) state' qCerts' mb'
-                                        else
-                                              execEnv (GetEnvReplicas env) (GetEnvState env) qCerts' mb'
-      | (prepMsg digest n rId) => if (seqNumAccepted ((GetEnvState env) rId) n) then
-                                        env
-                                   else
-                                      let qCerts' := (pushCertificate (GetEnvQCerts env) rId (qCert digest n)) in
-                                        if (isQuorumCertified (qCerts' rId) digest n) then
-                                           let state' := (pushSequenceNum (GetEnvState env) rId digest n) in
-                                              execEnv (GetEnvReplicas env) state' qCerts' (GetEnvMsgBox env)
-                                        else
-                                              execEnv (GetEnvReplicas env) (GetEnvState env) qCerts' (GetEnvMsgBox env)
-    end.
-
-Definition ProcessMessage (msg:Message) (sys:System) (rId : ReplicaId) (env : ExecEnvironment) :=
- match (FindReplica sys rId) with
-    | None => env
-    | Some replica => (replica env msg)
-  end.
-
-Fixpoint ProcessAllMessages (fuel : nat) (sys:System) (env : ExecEnvironment) := 
-  match fuel with
-  | 0 => env
-  | S f' =>
-      match (GetEnvMsgBox env) with
-      | nil => env
-      | msg::t => let rId := GetRID msg in
-                  let envI := (execEnv (GetEnvReplicas env) (GetEnvState env) (GetEnvQCerts env) t) in
-                  let env' := ProcessMessage msg sys rId envI in
-                    ProcessAllMessages f' sys env'
-      end
-  end.
-
-Print ExecEnvironment.
-Print System.
-Definition ProcessRequest (sys : System) (req : Message) : System :=
-  let env' := ProcessAllMessages MaxMessages sys (execEnv (GetReplicaIds sys) (GetState sys) EmptyQCerts [req]) in
-    (system (GetView sys) (GetEnvState env') (GetReplicas sys)).
-
-Fixpoint getCommonLedger (state : SysState) (replicas: SysReplicas) (gLedger : Ledger) :=
-match replicas with
-    | nil => Some gLedger
-    | (rId, _)::t => if (beq_ledgers (state rId) gLedger) then (getCommonLedger state t gLedger)
-                      else None
-end.
-
-Definition GetGlobalLedger (sys:System) : option Ledger :=
-  let state := GetState sys in
-    let gLedger := state "primary" in
-      let replicas := GetReplicas sys in
-         getCommonLedger state replicas gLedger.
-
-Definition GlobalLedgerValid  (sys: System) : Prop :=
-      match (GetGlobalLedger sys) with
-        | None => False
-        | Some (_) => True
-      end.
-
-Definition MajorityNonFaulty (sys:System) : Prop := True.
-
-Lemma system_safety: forall (sys:System),
-  GlobalLedgerValid sys
-  -> forall (digest : string), GlobalLedgerValid (ProcessRequest sys <<REQ digest , "primary">> ).
-Proof. intros. destruct sys as [view state replicas]. induction replicas.
- - 
+Lemma nfrMsgsInc_base_ind : forall (st base : State) (r:Replica) (lr: list nat) (n : nat), 
+    Forall (msgsEq 0) (((r, lr) :: base))
+      -> (nfrMsgsIncrementedBy st base n) = (nfrMsgsIncrementedBy st ((r, lr) :: base) n).
+Proof. intros st. induction st. auto.
+  - intros. destruct a. destruct base.
+    + simpl. inversion H. inversion H2. rewrite H5. simpl. auto.
+    + destruct p. simpl. 
+      rewrite (IHst base r1 l0 n).
+      {
+        inversion H; clear H. inversion H3; clear H3. subst. inversion H2; clear H2.
+        inversion H5; clear H5. rewrite H0. rewrite H1. auto.
+      }
+      { inversion H. apply H3. }
+Qed.
 
 
+Lemma nfrMsgsInc_base0 : forall (st base : State) (n : nat), 
+         Forall (msgsEq 0) (base)
+              -> nfrMsgsIncrementedBy st base n = nfrMsgsIncrementedBy st [] n.
+Proof.
+  intros. inversion H. destruct H0. 
+    - auto.
+    - induction st. auto. destruct a. destruct x. simpl.
+      simpl in H0. rewrite H0. simpl. rewrite <- IHst. 
+      rewrite (nfrMsgsInc_base_ind st l r0 l1 n) . auto.  
+      subst. apply H.
+Qed.
 
+Lemma nfrMsgsInc_baseCount : forall (st base : State) (r : Replica) (l : list nat) (n : nat),
+  nfrMsgsIncrementedBy ((r, l) :: st) base n -> countNFR_msgs l >= n. 
+intros. induction base.
+  - simpl in H. Omega.omega.
+  - destruct a. simpl in H. Omega.omega.
+Qed.
 
-(*
-Definition NonFaulty (rId : ReplicaId) : Prop := True.
+Lemma nfrIncN_nfrMsgs : forall (st base: State) (n : nat),
+  Forall (msgsEq 0) (base)
+   -> nfrMsgsIncrementedBy st base n
+    -> Forall (msgsGte n) st.
+Proof. intros st base n HBase H. induction st. auto. constructor.
+  - destruct a. simpl. apply (nfrMsgsInc_baseCount st base r l n). apply H.
+  - apply IHst; clear IHst. destruct base.
+    + destruct a. induction H. apply H0.
+    + destruct a. destruct p. induction H.
+      inversion HBase. rewrite nfrMsgsInc_base0. 
+      rewrite nfrMsgsInc_base0 in H0. 
+      { apply H0. } { apply H4. } { subst. constructor; assumption. }
+Qed.
 
+Lemma quorumCertifiedState : forall (st base : State),
+    Forall (msgsEq 0) base
+    -> nfrMsgsIncrementedBy st base (countNFR_state st)
+    -> LedgerAgreement st.
+Proof.
+  intros. unfold LedgerAgreement. unfold quorumCertified. 
+      remember (countNFR_state (st)) as n. 
+      apply (nfrIncN_nfrMsgs st base n). apply H. apply H0.
+Qed.
 
-Inductive StateValid : System -> Prop :=
-| empty_valid : forall sys:System, (GetState sys) = EmptyState 
-                  -> StateValid sys.
+Lemma initSt_msgEq0 : forall sys, Forall (msgsEq 0) (initState sys).
+Proof. intros. unfold initState. induction sys.
+  - simpl. constructor.
+  - simpl. constructor; simpl; auto.
+Qed. 
 
-
-Lemma system_safety: forall (sys:System),
-  MajorityNonFaulty sys
-  -> StateValid sys
-  -> forall (r:Request), StateValid (ProcessRequest sys r).
-Proof. Admitted.
-
-Theorem byzantine_fault_tolerant : forall (sys:System) (msgBox : MessageBox),
-    MajorityNonFaulty sys 
-    -> StateValid sys
-    -> StateValid (ProcessAllMessages sys msgBox).
-Proof. intros. destruct sys as [view state replicas].
-induction msgBox. 
-  - simpl in H0. simpl. apply H0.
-  - induction replicas.
-    + apply IHmsgBox.
-    + apply system_safety; assumption.
-Qed.*)
-
+Theorem BFT : forall (sys:System),
+      LedgerAgreement (ReplicateRequest sys (prePrep sys) (initState sys)).
+Proof.
+  intros. 
+    apply (quorumCertifiedState (ReplicateRequest sys (prePrep sys) (initState sys)) (initState sys)).
+    - apply initSt_msgEq0.
+    - rewrite <- countNFR_state_system. apply procReq_nfrInc. apply prePrepExt_refl.
+Qed.
