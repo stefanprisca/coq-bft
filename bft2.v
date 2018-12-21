@@ -159,8 +159,15 @@ Definition CorrectState (st:State) :=
     exists F,
     (count_state st = 3*F+1) /\ (countNFR_state st = 2*F+1).
 
+Definition prePrepExt (msgs : total_map nat) (sys:System) := 
+    msgs = prePrep sys \/ exists sys', msgs = prePrep (app sys' sys).
+
+Lemma prePrepExt_refl : forall sys, prePrepExt(prePrep sys) sys.
+  Proof. intros. unfold prePrepExt. left. auto.
+Qed.
+
 Axiom PrimaryNonFaulty : forall (sys:System) (msgs : total_map nat),
-     msgs = prePrep sys -> forall (id : ReplicaId), msgs id = nfrValue.
+     prePrepExt msgs sys -> forall (id : ReplicaId), msgs id = nfrValue.
 
 (* 
 Fixpoint nfrSubState (st:State) :=
@@ -189,6 +196,16 @@ match st1, st2 with
                                 /\ nfrMsgsIncrementedBy t1 t2 n
 end.
 
+Lemma nfrMsgsInc_reflexive: forall st:State,
+    nfrMsgsIncrementedBy st st 0.
+Proof.
+  intros. induction st.
+  - simpl. auto.
+  - destruct a. simpl. split.
+    + auto.
+    + apply IHst.
+Qed.
+
 Lemma n_Sn : forall n:nat,
   n + 1 = S n.
 Proof.
@@ -203,11 +220,13 @@ Lemma multicastNFV_nfrMsgsInc : forall (st base : State) (n:nat),
 Proof. intros st. induction st; intros; destruct base.
   - simpl. auto.
   - simpl. auto.
-  - destruct a. simpl in H. simpl. destruct H. admit.
+  - destruct a. simpl in H. simpl. destruct H. split.
+    + rewrite H. rewrite n_Sn. auto.
+    + apply IHst. apply H0.
   - destruct a. destruct p. simpl in H. destruct H. simpl. split.
     + symmetry. rewrite <- n_Sn. rewrite plus_assoc. rewrite H. auto.
     + apply IHst. apply H0.
-Admitted. 
+Qed. 
  
 
 Lemma multicastFV_nfrMsgsConst : forall (st base : State) (n:nat),
@@ -217,10 +236,11 @@ Proof.
 intros st. simpl. induction st.
   - intros. simpl. auto.
   - intros. destruct a. destruct base.
-    + simpl. simpl in H. admit.
+    + simpl. simpl in H. split.
+      { apply H. } { apply IHst. apply H. }
     + destruct p. simpl. simpl in H. destruct H. split.
       { apply H. } { apply IHst. apply H0. } 
-Admitted.
+Qed.
 
 Lemma multicast_nfrvInc : forall (st : State),
     nfrMsgsIncrementedBy (multicast st nfrValue) st 1.
@@ -241,31 +261,43 @@ Proof. intros.
     - inversion H.
     - simpl. unfold NFReplicaFun. 
       rewrite (PrimaryNonFaulty (NFReplica r :: sys) (prePrep (NFReplica r :: sys))). 
-      apply multicast_nfrvInc. reflexivity.
+      apply multicast_nfrvInc. unfold prePrepExt. left. auto.
 Qed.
 
 Lemma S_predn : forall n, n = S (pred n). Admitted.
+Lemma appcons_comm : forall (A:Type) (l1 l2 : list A) (a : A),
+    app l1 (a::l2) = app (app l1 [a]) l2. Admitted.
 
 Lemma procReq_nfrInc: forall (sys :System) (st : State) (msgs : total_map nat),
-    msgs = prePrep sys ->
+    prePrepExt msgs sys ->
     nfrMsgsIncrementedBy (ReplicateRequest sys msgs st)
                             st
                             (countNFR_system sys).
 Proof.
 intros sys. remember (countNFR_system sys) as n. generalize dependent n. induction sys.
-  - simpl. intros. simpl in Heqn. rewrite Heqn. admit.
+  - simpl. intros. simpl in Heqn. rewrite Heqn. apply nfrMsgsInc_reflexive.
   - intros. simpl. destruct a.
     + simpl. simpl in Heqn. unfold FaultyReplicaFun. apply multicastFV_nfrMsgsConst.
-      apply IHsys. apply Heqn. admit.
-    + simpl. simpl in Heqn. unfold NFReplicaFun. rewrite H. 
+      apply IHsys. apply Heqn. destruct H.
+      { unfold prePrepExt. right. exists [FaultyReplica r].  simpl. apply H. }
+      { 
+        unfold prePrepExt. right. inversion H. 
+        rewrite appcons_comm in H0. exists (app x [FaultyReplica r]). apply H0.
+      }
+    + simpl. simpl in Heqn. unfold NFReplicaFun. 
       rewrite (PrimaryNonFaulty (NFReplica r :: sys)).
-      { rewrite <- H. rewrite S_predn.
+      { rewrite S_predn.
         apply multicastNFV_nfrMsgsInc. apply IHsys.
         - rewrite Heqn. rewrite pred_Sn. auto.
-        - admit.
+        - destruct H.
+          { unfold prePrepExt. right. exists [FaultyReplica r].  simpl. apply H. }
+          { 
+            unfold prePrepExt. right. inversion H. 
+            rewrite appcons_comm in H0. exists (app x [NFReplica r]). apply H0.
+          }
       }
-      { reflexivity. }
-Admitted.
+      { apply H. }
+Qed.
 
 Definition quorumCertified (nfrSS : State) (r: (Replica * list nat)) :=
     match r with
@@ -343,5 +375,5 @@ Lemma BFT : forall (sys:System),
       LedgerAgreement (ReplicateRequest sys (prePrep sys) (initState sys)).
 Proof.
   intros. apply (quorumCertifiedState (ReplicateRequest sys (prePrep sys) (initState sys)) (initState sys)).
-    rewrite <- countNFR_state_system. apply procReq_nfrInc.
+    rewrite <- countNFR_state_system. apply procReq_nfrInc. apply prePrepExt_refl.
 Qed.
