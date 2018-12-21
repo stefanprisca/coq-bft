@@ -321,7 +321,7 @@ Definition msgsEq (n : nat) (r: (Replica * list nat)) :=
     end.
 
 Lemma blublap1 : forall (st base : State) (l l0 : list nat) (n : nat)  (r r0 : Replica),
-  Forall (msgsEq 0) ((r0, l0) :: base)
+  Forall (msgsEq 1) ((r0, l0) :: base)
   -> nfrMsgsIncrementedBy ((r, l) :: st) ((r0, l0) :: base) n
   -> nfrMsgsIncrementedBy st ((r0, l0) :: base) n.
 Proof. intros. induction H.
@@ -331,33 +331,41 @@ Proof. intros. induction H.
     + admit.
 Admitted.
 
+Lemma gte_plus : forall n m: nat, m + n >= n.
+Admitted.
+
 Lemma nfrIncN_nfrMsgs : forall (st base: State) (n : nat),
-  nfrMsgsIncrementedBy st base n
+  Forall (msgsEq 1) base
+    -> nfrMsgsIncrementedBy st base n
     -> Forall (msgsGte n) st.
 Proof. intros st. induction st.
   - constructor.
-  - intros. constructor.
+  - intros base n Hbase H. constructor.
     + destruct a. simpl in H. simpl. destruct base.
       { destruct H. rewrite H. destruct r; auto. }
-      { destruct p. destruct H. rewrite H. admit. }
-    + apply (IHst base n). destruct base.
+      { 
+        destruct p. destruct H. rewrite H. destruct r.
+        { auto. } { apply gte_plus. }
+      }
+    + apply (IHst base n). apply Hbase. destruct base.
       { destruct a. induction H. apply H0. }
       { 
         destruct a. destruct p.  apply (blublap1 st base l l0 n r r0).
-        { admit. } { apply H. }
+        { apply Hbase. } { apply H. }
       }
-Admitted.
+Qed.
 
 Lemma quorumCertifiedState : forall (st base : State),
-    nfrMsgsIncrementedBy st base (countNFR_state st)
+    Forall (msgsEq 1) base
+    -> nfrMsgsIncrementedBy st base (countNFR_state st)
     -> LedgerAgreement st.
 Proof.
   intros. unfold LedgerAgreement. unfold quorumCertified. 
       remember (countNFR_state (st)) as n. 
-      apply (nfrIncN_nfrMsgs st base n). apply H.
+      apply (nfrIncN_nfrMsgs st base n). apply H. apply H0.
 Qed.
 
-
+(* 
 Lemma replicateReq_nfrMsgsTrans : forall sys,
     nfrMsgsIncrementedBy
               (ReplicateRequest sys (prePrep sys) (initState sys))
@@ -369,11 +377,13 @@ Lemma replicateReq_nfrMsgsTrans : forall sys,
              ((r, []) :: initState sys) (countNFR_system sys).
 Proof. intros. apply nfrIncN_nfrMsgs in H.
     remember (prePrep (r :: sys)) as msgs'.
-   Admitted.
+   Admitted. *)
 
 Lemma BFT : forall (sys:System),
       LedgerAgreement (ReplicateRequest sys (prePrep sys) (initState sys)).
 Proof.
-  intros. apply (quorumCertifiedState (ReplicateRequest sys (prePrep sys) (initState sys)) (initState sys)).
-    rewrite <- countNFR_state_system. apply procReq_nfrInc. apply prePrepExt_refl.
-Qed.
+  intros. 
+    apply (quorumCertifiedState (ReplicateRequest sys (prePrep sys) (initState sys)) (initState sys)).
+    - admit.
+    - rewrite <- countNFR_state_system. apply procReq_nfrInc. apply prePrepExt_refl.
+Admitted.
