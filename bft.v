@@ -129,21 +129,9 @@ Qed.
 
 Theorem countNFR_state_system : forall sys:System,
     countNFR_system sys = countNFR_state (ReplicateRequest sys (prePrep sys) (initState sys)).
-Proof. intros. induction sys.
-  - reflexivity.
-  - destruct a.
-    + simpl. rewrite IHsys. 
-      rewrite (replicate_nfrTrans sys (prePrep sys) (initState sys)).
-      rewrite faultyR_countNFR.
-      rewrite (replicate_nfrTrans sys (prePrep (FaultyReplica r :: sys))
-                                  ((FaultyReplica r, []) :: initState sys)).
-      auto.
-    + simpl. rewrite IHsys. 
-      rewrite (replicate_nfrTrans sys (prePrep sys) (initState sys)).
-      rewrite nfR_countNFR.
-      rewrite (replicate_nfrTrans sys (prePrep (NFReplica r :: sys))
-                                  ((NFReplica r, []) :: initState sys)).
-      auto.
+Proof. intros. 
+  rewrite (replicate_nfrTrans sys (prePrep sys) (initState sys)).
+  symmetry. apply initSt_nfrTrans.
 Qed.
 
 Definition prePrepExt (msgs : total_map nat) (sys:System) := 
