@@ -127,7 +127,7 @@ Proof. intros sys. induction sys.
     + intros. simpl. rewrite nfR_countNFR. apply IHsys.
 Qed.
 
-Lemma countNFR_state_system : forall sys:System,
+Theorem countNFR_state_system : forall sys:System,
     countNFR_system sys = countNFR_state (ReplicateRequest sys (prePrep sys) (initState sys)).
 Proof. intros. induction sys.
   - reflexivity.
@@ -217,28 +217,6 @@ intros st. simpl. induction st.
       { apply H. } { apply IHst. apply H0. } 
 Qed.
 
-Lemma multicast_nfrvInc : forall (st : State),
-    nfrMsgsIncrementedBy (multicast st nfrValue) st 1.
-Proof.
-intros. induction st.
-- reflexivity.
-- destruct a. simpl. split. { auto. } { assumption. }
-Qed.
-
-
-Lemma nfrIncNfrMsgs : forall (sys : System) (r:Replica),
-IsNonFaulty r 
-  -> nfrMsgsIncrementedBy (ReplicateRequest (r::sys) (prePrep (r::sys)) ( initState (r::sys) ))
-                  (ReplicateRequest (sys) (prePrep (r::sys)) ( initState (r::sys) ))
-                  1.
-Proof. intros.
-  destruct r.
-    - inversion H.
-    - simpl. unfold NFReplicaFun. 
-      rewrite (PrimaryNonFaulty (NFReplica r :: sys) (prePrep (NFReplica r :: sys))). 
-      apply multicast_nfrvInc. unfold prePrepExt. left. auto.
-Qed.
-
 Lemma appcons_comm : forall (A:Type) (l1 l2 : list A) (a : A),
     app l1 (a::l2) = app (app l1 [a]) l2. intros.
 Proof. destruct l1; destruct l2; simpl; auto.
@@ -246,7 +224,7 @@ Proof. destruct l1; destruct l2; simpl; auto.
   - rewrite <- app_assoc. simpl. auto.
 Qed.
 
-Lemma procReq_nfrInc: forall (sys :System) (st : State) (msgs : total_map nat),
+Theorem procReq_nfrInc: forall (sys :System) (st : State) (msgs : total_map nat),
     prePrepExt msgs sys ->
     nfrMsgsIncrementedBy (ReplicateRequest sys msgs st)
                             st
@@ -348,7 +326,7 @@ Proof. intros st base n HBase H. induction st. auto. constructor.
       { apply H0. } { apply H4. } { subst. constructor; assumption. }
 Qed.
 
-Lemma quorumCertifiedState : forall (st base : State),
+Theorem quorumCertifiedState : forall (st base : State),
     Forall (msgsEq 0) base
     -> nfrMsgsIncrementedBy st base (countNFR_state st)
     -> LedgerAgreement st.
